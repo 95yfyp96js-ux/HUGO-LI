@@ -1,0 +1,60 @@
+/*
+  Design Tokens — 見 docs/PAGE_SPECS.md 與 ARCHITECTURE.md 的 Design System 決策。
+  視覺方向：安靜、可信任、具東方文化底蘊；刻意不使用 gradient/glow/glassmorphism/particle。
+*/
+:root {
+  /* Spacing scale (4px base) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+
+  /* Elevation (soft, low-contrast — 儀式感需要安靜而非浮誇) */
+  --elevation-0: none;
+  --elevation-1: 0 1px 2px rgba(20, 18, 16, 0.04), 0 4px 16px rgba(20, 18, 16, 0.06);
+  --elevation-2: 0 2px 4px rgba(20, 18, 16, 0.06), 0 8px 24px rgba(20, 18, 16, 0.1);
+
+  /* Motion tokens — 見 src/lib/motionTokens.ts 的型別對應 */
+  --duration-micro: 120ms;
+  --duration-standard: 240ms;
+  --duration-ceremony: 640ms;
+  --duration-reveal: 900ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-ceremony: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-settle: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
