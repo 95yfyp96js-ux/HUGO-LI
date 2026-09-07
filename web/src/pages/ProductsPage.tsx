@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
-import { percent, REPAYMENT_METHOD_LABELS } from "../lib/format";
+import { percent, termRange, REPAYMENT_METHOD_LABELS } from "../lib/format";
 import { DataTable, ErrorBanner, Loading, Money, PageHeader, StatusBadge } from "../components/ui";
 
 export interface Product {
@@ -13,6 +13,7 @@ export interface Product {
   maxAmount: string;
   minTermCount: number;
   maxTermCount: number;
+  termUnit: string;
   ratePercent: number;
   rateUnit: string;
   calculationMethod: string;
@@ -63,7 +64,7 @@ export function ProductsPage() {
                 </span>
               ),
             },
-            { header: "期數", cell: (row) => `${row.minTermCount}~${row.maxTermCount} 期` },
+            { header: "期間", cell: (row) => termRange(row.minTermCount, row.maxTermCount, row.termUnit) },
             {
               header: "還款方式",
               cell: (row) => REPAYMENT_METHOD_LABELS[row.repaymentMethod] ?? row.repaymentMethod,

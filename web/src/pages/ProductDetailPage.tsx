@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { date, percent, REPAYMENT_METHOD_LABELS } from "../lib/format";
+import { date, percent, termNoun, termRange, REPAYMENT_METHOD_LABELS } from "../lib/format";
 import { ErrorBanner, Field, Loading, Money, PageHeader, StatusBadge } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import type { Product } from "./ProductsPage";
@@ -72,8 +72,8 @@ export function ProductDetailPage() {
           <Field label="最高金額">
             <Money value={data.maxAmount} />
           </Field>
-          <Field label="期數範圍">
-            {data.minTermCount} ~ {data.maxTermCount} 期
+          <Field label={`${termNoun(data.termUnit)}範圍`}>
+            {termRange(data.minTermCount, data.maxTermCount, data.termUnit)}
           </Field>
           <Field label="版本">v{data.version}</Field>
           <Field label="建立日期">{date(data.createdAt)}</Field>

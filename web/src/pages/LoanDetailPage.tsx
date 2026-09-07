@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { api, newIdempotencyKey } from "../lib/api";
-import { date, dateTime, money, percent, REPAYMENT_METHOD_LABELS } from "../lib/format";
+import { date, dateTime, money, percent, REPAYMENT_METHOD_LABELS , termNoun, termSuffix} from "../lib/format";
 import {
   DataTable,
   ErrorBanner,
@@ -32,6 +32,7 @@ interface LoanDetail {
     ratePercent: number;
     rateUnit: string;
     termCount: number;
+    termUnit: string;
     repaymentMethod: string;
     calculationMethod: string;
     productVersion: number;
@@ -222,7 +223,9 @@ export function LoanDetailPage() {
             {loan.snapshot ? (
               <dl className="grid grid-cols-2 gap-4">
                 <Field label="利率">{percent(loan.snapshot.ratePercent, loan.snapshot.rateUnit)}</Field>
-                <Field label="期數">{loan.snapshot.termCount} 期</Field>
+                <Field label={termNoun(loan.snapshot.termUnit)}>
+                  {loan.snapshot.termCount} {termSuffix(loan.snapshot.termUnit)}
+                </Field>
                 <Field label="還款方式">
                   {REPAYMENT_METHOD_LABELS[loan.snapshot.repaymentMethod] ?? loan.snapshot.repaymentMethod}
                 </Field>

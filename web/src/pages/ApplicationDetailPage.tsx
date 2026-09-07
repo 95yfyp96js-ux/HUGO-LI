@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { date, dateTime, money, percent, REPAYMENT_METHOD_LABELS } from "../lib/format";
+import { useGuardedAction } from "../lib/useGuardedAction";
+import { date, dateTime, money, percent, REPAYMENT_METHOD_LABELS , termNoun, termSuffix} from "../lib/format";
 import {
   ErrorBanner,
   Field,
@@ -32,7 +33,7 @@ interface ApplicationDetail {
     employer: string | null;
     status: string;
   };
-  requestedProduct: { id: string; name: string; ratePercent: number; rateUnit: string };
+  requestedProduct: { id: string; name: string; ratePercent: number; rateUnit: string; termUnit: string };
   riskAssessments: Array<{
     id: string;
     score: number;
@@ -58,6 +59,7 @@ interface ApplicationDetail {
     ratePercent: number;
     rateUnit: string;
     termCount: number;
+    termUnit: "DAY" | "MONTH";
     feesCents: number;
     repaymentMethod: string;
     totalInterestCents: number;
@@ -92,19 +94,38 @@ export function ApplicationDetailPage() {
     queryClient.invalidateQueries({ queryKey: ["applications"] });
   };
 
-  const submitMutation = useMutation({
-    mutationFn: () => api(`/api/lending/applications/${id}/submit`, { method: "POST" }),
-    onSuccess: invalidate,
-  });
+  const submitAction = useGuardedAction(
+    (idempotencyKey) =>
+      api(`/api/lending/applications/${id}/submit`, { method: "POST", idempotencyKey }),
+    { onSuccess: invalidate }
+  );
 
-  const approveMutation = useMutation({
-    mutationFn: () =>
+  // Approval may depart from the priced offer. Whatever the manager settles on
+  // is what gets written to the approval record and frozen into the new loan's
+  // snapshot, so the contract and the decision cannot disagree.
+  const [showApprove, setShowApprove] = useState(false);
+  const [override, setOverride] = useState({ amount: "", termCount: "", ratePercent: "", reason: "" });
+
+  const approveAction = useGuardedAction(
+    (idempotencyKey) =>
       api(`/api/lending/applications/${id}/approve`, {
         method: "POST",
-        body: { reason: "符合授信條件" },
+        idempotencyKey,
+        body: {
+          reason: override.reason.trim() || "符合授信條件",
+          // Omitted fields keep the offer's own terms.
+          ...(override.amount ? { approvedAmount: override.amount } : {}),
+          ...(override.termCount ? { approvedTermCount: Number(override.termCount) } : {}),
+          ...(override.ratePercent ? { approvedRatePercent: Number(override.ratePercent) } : {}),
+        },
       }),
-    onSuccess: invalidate,
-  });
+    {
+      onSuccess: () => {
+        setShowApprove(false);
+        invalidate();
+      },
+    }
+  );
 
   const rejectMutation = useMutation({
     mutationFn: () =>
@@ -143,19 +164,19 @@ export function ApplicationDetailPage() {
             {data.status === "DRAFT" && can("APPLICATION_UPDATE") && (
               <button
                 className="btn-primary"
-                onClick={() => submitMutation.mutate()}
-                disabled={submitMutation.isPending}
+                onClick={submitAction.trigger}
+                disabled={submitAction.isPending}
               >
-                {submitMutation.isPending ? "審核中…" : "送出申請（執行風控）"}
+                {submitAction.isPending ? "審核中…" : "送出申請（執行風控）"}
               </button>
             )}
             {canDecide && can("APPLICATION_APPROVE") && (
               <button
                 className="btn-primary"
-                onClick={() => approveMutation.mutate()}
-                disabled={approveMutation.isPending || !offer}
+                onClick={() => setShowApprove(true)}
+                disabled={approveAction.isPending || !offer}
               >
-                核准
+                {approveAction.isPending ? "核准中…" : "核准"}
               </button>
             )}
             {canDecide && can("APPLICATION_REJECT") && (
@@ -183,7 +204,7 @@ export function ApplicationDetailPage() {
 
       <ErrorBanner
         error={
-          submitMutation.error ?? approveMutation.error ?? rejectMutation.error ?? createLoanMutation.error
+          submitAction.error ?? rejectMutation.error ?? createLoanMutation.error
         }
       />
 
@@ -198,7 +219,9 @@ export function ApplicationDetailPage() {
           <h2 className="mb-4 text-sm font-semibold text-slate-700">申請內容</h2>
           <dl className="grid grid-cols-2 gap-4">
             <Field label="申請金額">{money(data.requestedAmountCents / 100)}</Field>
-            <Field label="申請期數">{data.requestedTermCount} 期</Field>
+            <Field label={`申請${termNoun(data.requestedProduct.termUnit)}`}>
+              {data.requestedTermCount} {termSuffix(data.requestedProduct.termUnit)}
+            </Field>
             <Field label="產品">{data.requestedProduct.name}</Field>
             <Field label="產品利率">
               {percent(data.requestedProduct.ratePercent, data.requestedProduct.rateUnit)}
@@ -315,7 +338,9 @@ export function ApplicationDetailPage() {
               <dl className="grid grid-cols-2 gap-4">
                 <Field label="核准金額">{money(offer.approvedAmountCents / 100)}</Field>
                 <Field label="放款利率">{percent(offer.ratePercent, offer.rateUnit)}</Field>
-                <Field label="期數">{offer.termCount} 期</Field>
+                <Field label={termNoun(offer.termUnit)}>
+                  {offer.termCount} {termSuffix(offer.termUnit)}
+                </Field>
                 <Field label="還款方式">
                   {REPAYMENT_METHOD_LABELS[offer.repaymentMethod] ?? offer.repaymentMethod}
                 </Field>
@@ -350,6 +375,81 @@ export function ApplicationDetailPage() {
           )}
         </div>
       </div>
+
+      {showApprove && offer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6">
+            <h2 className="text-lg font-semibold">核准申請</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              留白即採用定價結果。任何調整都會寫入核准紀錄與新貸的合約快照，事後不可修改。
+            </p>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+              <div>
+                <label className="label" htmlFor="apv-amount">核准金額</label>
+                <input
+                  id="apv-amount"
+                  className="input tabular"
+                  inputMode="decimal"
+                  placeholder={String(offer.approvedAmountCents / 100)}
+                  value={override.amount}
+                  onChange={(e) => setOverride((o) => ({ ...o, amount: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="apv-term">
+                  核准{termNoun(offer.termUnit)}
+                </label>
+                <input
+                  id="apv-term"
+                  className="input tabular"
+                  inputMode="numeric"
+                  placeholder={String(offer.termCount)}
+                  value={override.termCount}
+                  onChange={(e) => setOverride((o) => ({ ...o, termCount: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="apv-rate">核准利率 %</label>
+                <input
+                  id="apv-rate"
+                  className="input tabular"
+                  inputMode="decimal"
+                  placeholder={String(offer.ratePercent)}
+                  value={override.ratePercent}
+                  onChange={(e) => setOverride((o) => ({ ...o, ratePercent: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            <div className="mt-3">
+              <label className="label" htmlFor="apv-reason">核准說明</label>
+              <textarea
+                id="apv-reason"
+                className="input"
+                rows={2}
+                value={override.reason}
+                onChange={(e) => setOverride((o) => ({ ...o, reason: e.target.value }))}
+                placeholder="符合授信條件"
+              />
+            </div>
+
+            <ErrorBanner error={approveAction.error} />
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="btn-secondary" onClick={() => setShowApprove(false)}>
+                取消
+              </button>
+              <button
+                className="btn-primary"
+                onClick={approveAction.trigger}
+                disabled={approveAction.isPending}
+              >
+                {approveAction.isPending ? "核准中…" : "確認核准"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showReject && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">

@@ -14,7 +14,18 @@ interface Product {
   maxTermCount: number;
   ratePercent: number;
   rateUnit: string;
+  termUnit: "DAY" | "MONTH";
   status: string;
+}
+
+const RATE_UNIT_LABEL: Record<string, string> = { DAILY: "日", MONTHLY: "月", ANNUAL: "年" };
+
+/** A day product asks for 天數; a month product asks for 期數. */
+function termNoun(termUnit: string) {
+  return termUnit === "DAY" ? "天數" : "期數";
+}
+function termSuffix(termUnit: string) {
+  return termUnit === "DAY" ? "天" : "期";
 }
 
 interface CustomerOption {
@@ -68,6 +79,33 @@ export function NewApplicationPage() {
   });
 
   const selectedProduct = products?.items.find((p) => p.id === form.requestedProductId);
+
+  // The same limits the server enforces, checked here so the reason is visible
+  // before the request is sent. The server remains the authority — this only
+  // saves the round trip and explains the refusal in the field it belongs to.
+  const amountValue = Number(form.requestedAmount);
+  const termValue = Number(form.requestedTermCount);
+  const amountError =
+    selectedProduct && form.requestedAmount !== "" &&
+    (!Number.isFinite(amountValue) ||
+      amountValue < Number(selectedProduct.minAmount) ||
+      amountValue > Number(selectedProduct.maxAmount))
+      ? `金額需介於 ${selectedProduct.minAmount} ~ ${selectedProduct.maxAmount}`
+      : null;
+  const termError =
+    selectedProduct && form.requestedTermCount !== "" &&
+    (!Number.isInteger(termValue) ||
+      termValue < selectedProduct.minTermCount ||
+      termValue > selectedProduct.maxTermCount)
+      ? `${termNoun(selectedProduct.termUnit)}需介於 ${selectedProduct.minTermCount} ~ ${selectedProduct.maxTermCount}${termSuffix(selectedProduct.termUnit)}`
+      : null;
+  const canSubmit =
+    Boolean(customerId) &&
+    Boolean(form.requestedProductId) &&
+    form.requestedAmount !== "" &&
+    form.requestedTermCount !== "" &&
+    !amountError &&
+    !termError;
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -133,16 +171,33 @@ export function NewApplicationPage() {
             <option value="">請選擇產品</option>
             {products?.items.map((product) => (
               <option key={product.id} value={product.id}>
-                {product.name}（{product.ratePercent}%
-                {product.rateUnit === "MONTHLY" ? "／月" : product.rateUnit === "DAILY" ? "／日" : "／年"}）
+                {product.name}（{product.ratePercent}%／{RATE_UNIT_LABEL[product.rateUnit] ?? product.rateUnit}）
               </option>
             ))}
           </select>
           {selectedProduct && (
-            <p className="mt-1 text-xs text-slate-500">
-              金額 {selectedProduct.minAmount} ~ {selectedProduct.maxAmount}，期數{" "}
-              {selectedProduct.minTermCount} ~ {selectedProduct.maxTermCount} 期
-            </p>
+            <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg bg-slate-50 px-3 py-2 text-xs sm:grid-cols-3">
+              <div>
+                <dt className="text-slate-500">利率</dt>
+                <dd className="tabular font-medium text-slate-900">
+                  {selectedProduct.ratePercent}%／{RATE_UNIT_LABEL[selectedProduct.rateUnit] ?? selectedProduct.rateUnit}
+                  <span className="ml-1 font-normal text-slate-500">單利</span>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">可借金額</dt>
+                <dd className="tabular font-medium text-slate-900">
+                  {selectedProduct.minAmount} ~ {selectedProduct.maxAmount}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">可借{termNoun(selectedProduct.termUnit)}</dt>
+                <dd className="tabular font-medium text-slate-900">
+                  {selectedProduct.minTermCount} ~ {selectedProduct.maxTermCount}
+                  {termSuffix(selectedProduct.termUnit)}
+                </dd>
+              </div>
+            </dl>
           )}
         </div>
 
@@ -154,18 +209,24 @@ export function NewApplicationPage() {
               inputMode="decimal"
               value={form.requestedAmount}
               onChange={(e) => setForm((f) => ({ ...f, requestedAmount: e.target.value }))}
+              aria-invalid={amountError ? true : undefined}
               required
             />
+            {amountError && <p className="mt-1 text-xs text-rose-600">{amountError}</p>}
           </div>
           <div>
-            <label className="label" htmlFor="newa-f4">申請期數 *</label>
+            <label className="label" htmlFor="newa-f4">
+              申請{selectedProduct ? termNoun(selectedProduct.termUnit) : "期數"} *
+            </label>
             <input id="newa-f4"
               className="input tabular"
               inputMode="numeric"
               value={form.requestedTermCount}
               onChange={(e) => setForm((f) => ({ ...f, requestedTermCount: e.target.value }))}
+              aria-invalid={termError ? true : undefined}
               required
             />
+            {termError && <p className="mt-1 text-xs text-rose-600">{termError}</p>}
           </div>
           <div>
             <label className="label" htmlFor="newa-f5">月收入</label>
@@ -202,7 +263,7 @@ export function NewApplicationPage() {
           <button
             type="submit"
             className="btn-primary"
-            disabled={mutation.isPending || !customerId || !form.requestedProductId}
+            disabled={mutation.isPending || !canSubmit}
           >
             {mutation.isPending ? "建立中…" : "建立申請"}
           </button>

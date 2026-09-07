@@ -239,3 +239,22 @@ export function Tabs({
     </div>
   );
 }
+
+/**
+ * Shown on every screen, including the login page.
+ *
+ * This system computes real interest and writes a real ledger, so anyone
+ * looking at it needs to know at a glance that the numbers are practice and
+ * not a live loan book. It is fixed to the viewport rather than placed in the
+ * page so no route can render without it.
+ */
+export function TrainingBanner() {
+  return (
+    <div
+      role="status"
+      className="fixed inset-x-0 top-0 z-[60] flex h-6 items-center justify-center bg-amber-400 px-3 text-xs font-semibold text-amber-950"
+    >
+      訓練用環境 · 本機練習資料，非正式核貸，不具法律效力
+    </div>
+  );
+}

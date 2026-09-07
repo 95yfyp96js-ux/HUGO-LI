@@ -53,7 +53,19 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token = tokenStore.get();
   if (token) headers.Authorization = `Bearer ${token}`;
-  if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
+
+  // Every write carries an Idempotency-Key, so a money-moving endpoint can
+  // never be called without one. A caller that owns a stable key passes it —
+  // that is what makes a retry of the *same* action collapse into one payment.
+  // The fallback below only guarantees the header exists; it is a new key each
+  // call, so it protects against a missing header, not against a double click.
+  // Buttons handle that by holding one key for the action and staying disabled
+  // while it is in flight.
+  if ((options.method ?? "GET") === "POST") {
+    headers["Idempotency-Key"] = options.idempotencyKey ?? newIdempotencyKey();
+  } else if (options.idempotencyKey) {
+    headers["Idempotency-Key"] = options.idempotencyKey;
+  }
 
   const response = await fetch(url.toString(), {
     method: options.method ?? "GET",

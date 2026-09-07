@@ -98,3 +98,18 @@ export const REPAYMENT_METHOD_LABELS: Record<string, string> = {
   BULLET: "到期一次清償",
   CUSTOM: "自訂",
 };
+
+/** A day-term product is measured in 天; a month-term one in 期. */
+export function termSuffix(termUnit: string | null | undefined): string {
+  return termUnit === "DAY" ? "天" : "期";
+}
+
+/** The noun for a term field: 天數 for day products, 期數 for month products. */
+export function termNoun(termUnit: string | null | undefined): string {
+  return termUnit === "DAY" ? "天數" : "期數";
+}
+
+/** Renders a term range with its own unit, e.g. "7 ~ 30 天". */
+export function termRange(min: number, max: number, termUnit: string | null | undefined): string {
+  return `${min} ~ ${max} ${termSuffix(termUnit)}`;
+}

@@ -63,8 +63,10 @@ export function Layout() {
 
   const visible = (item: NavItem) => !item.permission || can(item.permission);
 
+  // pt-6 clears the fixed training banner, which owns the top 1.5rem of the
+  // viewport on every route.
   return (
-    <div className="min-h-screen lg:flex">
+    <div className="min-h-screen pt-6 lg:flex">
       {/* Desktop sidebar */}
       <aside className="hidden w-64 shrink-0 border-r border-slate-200 bg-white lg:block">
         <div className="flex h-16 items-center gap-2 border-b border-slate-200 px-5">
@@ -105,7 +107,7 @@ export function Layout() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 lg:px-8">
+        <header className="sticky top-6 z-20 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 lg:px-8">
           <button
             className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 lg:hidden"
             onClick={() => setMenuOpen((open) => !open)}
