@@ -1,58 +1,50 @@
 import type { Config } from 'tailwindcss';
 
+/**
+ * 視覺方向：「一座夜裡的宮廟，只有香爐和燭火發光，其他都在暗處。」
+ *
+ * 調色盤刻意極小，只有四個角色：
+ *   void  — 夜。頁面的地，近黑但帶木頭/香灰的暖度，不是純黑也不是藍黑。
+ *   ash   — 被微光照到的字。永遠不是純白，因為夜裡沒有純白。
+ *   ember — 香爐的火光（暖橘紅）。只用在「真的是光」的地方。
+ *   flame — 燭火／燈火（暖金）。同樣只用在光源本身。
+ *   paper — 紙。只准出現在真的是紙的東西上：籤紙、祈願卡。
+ *
+ * 沒有第五種顏色。沒有裝飾色、沒有品牌色、沒有狀態色階——
+ * 質感來自字體、留白、光影，不是來自更多顏色。
+ */
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
-        ink: {
-          50: '#f7f6f3',
-          100: '#eeece5',
-          200: '#dcd8ca',
-          300: '#c2bba4',
-          400: '#a3987a',
-          500: '#8a7c5c',
-          600: '#6f6249',
-          700: '#584d3a',
-          800: '#3d3527',
-          900: '#221d16',
-          950: '#141210',
+        void: {
+          DEFAULT: '#0c0a09',
+          deep: '#050404',
+          raised: '#141110',
+          line: '#211c19',
+        },
+        ash: {
+          100: '#e6e0d6',
+          300: '#b0a89b',
+          500: '#7d766c',
+          700: '#4e4842',
+          900: '#2a2624',
         },
         ember: {
-          50: '#fdf3ee',
-          100: '#fbe3d6',
-          200: '#f5c3a8',
-          300: '#eb9c74',
-          400: '#df7644',
-          500: '#c85a2c',
-          600: '#a34423',
-          700: '#7f3520',
-          800: '#5f291c',
-          900: '#3f1c14',
+          core: '#ff9152',
+          DEFAULT: '#d9622c',
+          deep: '#8a3a17',
         },
-        jade: {
-          50: '#eef4f1',
-          100: '#d6e6dd',
-          200: '#adccbc',
-          300: '#82ae99',
-          400: '#5c9077',
-          500: '#417a5f',
-          600: '#3a6650',
-          700: '#2c4f3d',
-          800: '#1f382b',
-          900: '#13221a',
+        flame: {
+          core: '#ffd9a0',
+          DEFAULT: '#e3b26b',
+          deep: '#8c6a38',
         },
-        gold: {
-          400: '#d8b26a',
-          500: '#bd934a',
-          600: '#977338',
-        },
-        surface: {
-          DEFAULT: '#faf8f4',
-          raised: '#ffffff',
-          sunken: '#f1ede4',
-          dark: '#171310',
-          'dark-raised': '#1f1a15',
+        paper: {
+          DEFAULT: '#f2e9d8',
+          shade: '#e0d4bd',
+          ink: '#2b2419',
         },
       },
       fontFamily: {
@@ -60,14 +52,14 @@ export default {
         body: ['"Noto Sans TC"', 'system-ui', 'sans-serif'],
       },
       borderRadius: {
-        sm: '6px',
-        md: '10px',
-        lg: '16px',
-        xl: '24px',
+        sm: '2px',
+        md: '3px',
+        lg: '4px',
+        xl: '6px',
       },
-      boxShadow: {
-        soft: '0 1px 2px rgba(20,18,16,0.04), 0 4px 16px rgba(20,18,16,0.06)',
-        raised: '0 2px 4px rgba(20,18,16,0.06), 0 8px 24px rgba(20,18,16,0.10)',
+      letterSpacing: {
+        ritual: '0.28em',
+        wide: '0.08em',
       },
       transitionTimingFunction: {
         ceremony: 'cubic-bezier(0.22, 1, 0.36, 1)',
@@ -75,6 +67,5 @@ export default {
       },
     },
   },
-  darkMode: 'class',
   plugins: [],
 } satisfies Config;

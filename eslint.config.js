@@ -21,6 +21,9 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+      // 介面文案刻意使用全形空格（U+3000）作為中文排版的分隔，例如「掌管　平安健康」。
+      // 這是排版決定而不是誤植的隱形字元，因此在 JSX 文字與字串中允許。
+      'no-irregular-whitespace': ['error', { skipStrings: true, skipJSXText: true }],
     },
   },
 );

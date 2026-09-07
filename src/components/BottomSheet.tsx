@@ -9,14 +9,13 @@ interface BottomSheetProps {
   children: ReactNode;
 }
 
-/** 手機用 Modal 呈現方式；桌面亦可重用（置中卡片）。 */
 export function BottomSheet({ open, onClose, title, children }: BottomSheetProps) {
   return (
     <AnimatePresence>
       {open && (
         <>
           <motion.div
-            className="fixed inset-0 z-40 bg-ink-950/40"
+            className="fixed inset-0 z-40 bg-void-deep/80"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -28,13 +27,13 @@ export function BottomSheet({ open, onClose, title, children }: BottomSheetProps
             role="dialog"
             aria-modal="true"
             aria-label={title}
-            className="fixed inset-x-0 bottom-0 z-50 max-h-[85vh] overflow-y-auto rounded-t-xl bg-surface-raised p-6 shadow-raised md:inset-x-auto md:left-1/2 md:bottom-auto md:top-1/2 md:w-full md:max-w-md md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-lg"
+            className="fixed inset-x-0 bottom-0 z-50 max-h-[85vh] overflow-y-auto border-t border-void-line bg-void-raised px-6 py-8 md:inset-x-auto md:bottom-auto md:left-1/2 md:top-1/2 md:w-full md:max-w-md md:-translate-x-1/2 md:-translate-y-1/2 md:border"
             initial={{ y: '100%' }}
             animate={{ y: 0 }}
             exit={{ y: '100%' }}
             transition={{ duration: duration.ceremony, ease: ease.settle }}
           >
-            {title && <h2 className="mb-4 text-lg font-display font-medium text-ink-900">{title}</h2>}
+            {title && <h2 className="mb-6 font-display text-lg tracking-wide text-ash-100">{title}</h2>}
             {children}
           </motion.div>
         </>

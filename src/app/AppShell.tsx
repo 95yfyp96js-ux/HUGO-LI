@@ -3,54 +3,57 @@ import clsx from '@/lib/clsx';
 import { NAV_ITEMS } from './nav';
 
 /**
- * Desktop（≥1024px）：Sidebar + Header。Mobile（<1024px）：Bottom Navigation。
- * 全螢幕儀式體驗頁面（拜拜/抽籤）在各自路由中以 fullscreen layout 覆蓋，不套用此 Shell。
+ * 全螢幕儀式路由（拜拜／抽籤／點燈）不套用這層外框——
+ * 儀式進行時畫面上不該有導覽列，那會破壞「只有一個光源」與置中對稱的構圖。
  */
+const CEREMONY_ROUTE = /^\/(worship|fortune)\/|^\/lantern\/new/;
+
 export function AppShell() {
   const location = useLocation();
-  const isFullscreenCeremony = /^\/(worship|fortune)\//.test(location.pathname);
 
-  if (isFullscreenCeremony) {
+  if (CEREMONY_ROUTE.test(location.pathname)) {
     return <Outlet />;
   }
 
   return (
-    <div className="flex min-h-screen flex-col lg:flex-row">
-      <aside className="hidden w-60 shrink-0 border-r border-ink-100 bg-surface-raised lg:flex lg:flex-col">
-        <div className="px-6 py-8">
-          <p className="font-display text-lg font-medium text-ink-900">信仰時光</p>
-          <p className="mt-1 text-xs text-ink-400">Digital Faith Platform · 原型</p>
+    <div className="flex min-h-screen flex-col bg-void lg:flex-row">
+      {/* 桌面：左側導覽。它本身就是「靠左不對稱」構圖的一部分 */}
+      <aside className="hidden w-56 shrink-0 border-r border-void-line lg:block">
+        <div className="sticky top-0 px-8 py-12">
+          <p className="font-display text-sm tracking-ritual text-ash-300">信仰時光</p>
+          <nav className="mt-14 flex flex-col gap-1">
+            {NAV_ITEMS.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === '/'}
+                className={({ isActive }) =>
+                  clsx(
+                    'border-l py-2.5 pl-4 text-[13px] tracking-wide transition-colors duration-200',
+                    isActive
+                      ? 'border-flame/70 text-ash-100'
+                      : 'border-transparent text-ash-700 hover:text-ash-300',
+                  )
+                }
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
         </div>
-        <nav className="flex flex-col gap-1 px-3">
-          {NAV_ITEMS.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }) =>
-                clsx(
-                  'flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
-                  isActive ? 'bg-ink-900 text-surface' : 'text-ink-600 hover:bg-ink-100',
-                )
-              }
-            >
-              <span aria-hidden>{item.icon}</span>
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
       </aside>
 
       <div className="flex flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between border-b border-ink-100 bg-surface-raised px-4 lg:hidden">
-          <p className="font-display text-base font-medium text-ink-900">信仰時光</p>
+        <header className="flex h-14 items-center border-b border-void-line px-6 lg:hidden">
+          <p className="font-display text-xs tracking-ritual text-ash-500">信仰時光</p>
         </header>
 
         <main className="flex-1 pb-20 lg:pb-0">
           <Outlet />
         </main>
 
-        <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-ink-100 bg-surface-raised lg:hidden">
+        {/* 手機：底部導覽。同樣只有文字，選取狀態是一條被火光照到的線 */}
+        <nav className="fixed inset-x-0 bottom-0 z-30 flex border-t border-void-line bg-void/95 backdrop-blur-sm lg:hidden">
           {NAV_ITEMS.map((item) => (
             <NavLink
               key={item.to}
@@ -58,14 +61,11 @@ export function AppShell() {
               end={item.to === '/'}
               className={({ isActive }) =>
                 clsx(
-                  'flex flex-1 flex-col items-center gap-0.5 py-2.5 text-xs font-medium transition-colors',
-                  isActive ? 'text-ink-900' : 'text-ink-400',
+                  'flex flex-1 justify-center border-t py-4 text-[11px] tracking-wide transition-colors duration-200',
+                  isActive ? 'border-flame/70 text-ash-100' : 'border-transparent text-ash-700',
                 )
               }
             >
-              <span aria-hidden className="text-lg leading-none">
-                {item.icon}
-              </span>
               {item.label}
             </NavLink>
           ))}

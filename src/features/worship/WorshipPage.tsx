@@ -7,7 +7,9 @@ import { useAsync } from '@/lib/useAsync';
 import { faithService, MOCK_USER_ID } from '@/services';
 import { LoadingState, ErrorState } from '@/components/StateViews';
 import { Button } from '@/components/Button';
+import { Paper } from '@/components/Paper';
 import { useToast } from '@/components/Toast';
+import { CeremonyScreen, RitualLabel } from '@/components/screens';
 import { audioManager } from '@/lib/audioManager';
 import { duration, ease } from '@/lib/motionTokens';
 import { IncenseVisual } from './IncenseVisual';
@@ -32,7 +34,7 @@ export function WorshipPage() {
 
   useEffect(() => {
     if (state === 'PREPARING') {
-      const timer = setTimeout(() => send('READY'), 900);
+      const timer = setTimeout(() => send('READY'), 1200);
       return () => clearTimeout(timer);
     }
   }, [state, send]);
@@ -78,30 +80,37 @@ export function WorshipPage() {
     }
   }
 
+  // 光源全程固定在香爐的位置（畫面中央偏下），並隨儀式進行變亮——
+  // 光沒有移動，是我們越走越近。
+  const litIntensity = state === 'INCENSE' ? 0.1 : state === 'IDLE' || state === 'SELECT_DEITY' ? 0.08 : 0.2;
+
   if (deityAsync.status === 'loading') {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-surface-dark">
-        <LoadingState label="準備神明空間中…" />
-      </div>
+      <CeremonyScreen light={{ source: 'ember', x: 50, y: 54, radius: 26, intensity: 0.16 }}>
+        <LoadingState label="準備神明空間" />
+      </CeremonyScreen>
     );
   }
   if (deityAsync.status === 'error' || !deityAsync.data) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-surface-dark p-6">
-        <ErrorState message="無法進入拜拜體驗" onRetry={deityAsync.status === 'error' ? deityAsync.retry : undefined} />
-      </div>
+      <CeremonyScreen light={{ source: 'ember', x: 50, y: 54, radius: 26, intensity: 0.16 }}>
+        <ErrorState
+          message="無法進入拜拜體驗"
+          onRetry={deityAsync.status === 'error' ? deityAsync.retry : undefined}
+        />
+      </CeremonyScreen>
     );
   }
   const deity = deityAsync.data;
 
   return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-surface-dark px-6 py-10 text-surface">
+    <CeremonyScreen light={{ source: 'ember', x: 50, y: 54, radius: 26, intensity: litIntensity }}>
       <button
         onClick={() => navigate(`/explore/deities/${deityId}`)}
-        aria-label="關閉"
-        className="absolute right-4 top-4 rounded-full p-2 text-ink-300 hover:bg-white/5 hover:text-surface"
+        aria-label="離開"
+        className="absolute right-6 top-6 text-xs tracking-wide text-ash-700 transition-colors hover:text-ash-300"
       >
-        ✕
+        離開
       </button>
 
       <AnimatePresence mode="wait">
@@ -111,30 +120,31 @@ export function WorshipPage() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: duration.standard }}
-            className="flex flex-col items-center gap-6 text-center"
+            transition={{ duration: duration.ceremony }}
+            className="flex flex-col items-center"
           >
-            <p className="text-sm text-ink-300">即將前往</p>
-            <h1 className="font-display text-3xl font-medium">{deity.name}</h1>
-            <p className="max-w-xs text-sm text-ink-300">{deity.title} · {deity.domain.join('・')}</p>
-            <Button size="lg" onClick={handleBegin} className="mt-4 bg-surface text-ink-900 hover:bg-ink-100">
-              開始拜拜
+            <RitualLabel>{deity.title}</RitualLabel>
+            <h1 className="mt-8 font-display text-4xl font-medium tracking-[0.2em] text-ash-100">
+              {deity.name}
+            </h1>
+            <p className="mt-6 text-xs tracking-wide text-ash-700">{deity.domain.join('　')}</p>
+            <Button size="lg" onClick={handleBegin} className="mt-16">
+              上香
             </Button>
           </motion.div>
         )}
 
         {state === 'PREPARING' && (
-          <motion.div
+          <motion.p
             key="preparing"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: duration.standard }}
-            className="flex flex-col items-center gap-3 text-center"
+            transition={{ duration: duration.ceremony }}
+            className="text-xs tracking-ritual text-ash-700"
           >
-            <div className="h-8 w-8 animate-pulse rounded-full bg-ember-400/60" />
-            <p className="text-sm text-ink-300">正在準備供桌與香案…</p>
-          </motion.div>
+            靜心
+          </motion.p>
         )}
 
         {(state === 'INCENSE' || state === 'WORSHIP') && (
@@ -144,21 +154,21 @@ export function WorshipPage() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: duration.ceremony, ease: ease.ceremony }}
-            className="flex flex-col items-center gap-8 text-center"
+            className="flex flex-col items-center"
           >
             <IncenseVisual lit={state === 'WORSHIP'} />
             {state === 'INCENSE' && (
-              <Button size="lg" onClick={handleLight} className="bg-surface text-ink-900 hover:bg-ink-100">
+              <Button size="lg" onClick={handleLight} className="mt-14">
                 點香
               </Button>
             )}
             {state === 'WORSHIP' && (
-              <div className="flex flex-col items-center gap-2">
-                <p className="text-sm text-ink-300">靜心片刻，向{deity.name}行禮</p>
-                <Button size="lg" onClick={handleBow} className="bg-surface text-ink-900 hover:bg-ink-100">
-                  鞠躬獻敬
+              <>
+                <p className="mt-14 text-xs tracking-ritual text-ash-500">向{deity.name}行禮</p>
+                <Button size="lg" onClick={handleBow} className="mt-8">
+                  鞠躬
                 </Button>
-              </div>
+              </>
             )}
           </motion.div>
         )}
@@ -166,28 +176,26 @@ export function WorshipPage() {
         {state === 'PRAYER' && (
           <motion.div
             key="prayer"
-            initial={{ opacity: 0, y: 12 }}
+            initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: duration.standard, ease: ease.settle }}
-            className="flex w-full max-w-sm flex-col items-center gap-4 text-center"
+            transition={{ duration: duration.ceremony, ease: ease.settle }}
+            className="flex w-full max-w-sm flex-col items-center"
           >
-            <p className="text-sm text-ink-300">此刻，向{deity.name}說出心願</p>
-            <textarea
-              value={wish}
-              onChange={(e) => setWish(e.target.value)}
-              maxLength={200}
-              rows={4}
-              placeholder="在心中默念，或寫下您的祈願…"
-              className="w-full rounded-md border border-white/15 bg-white/5 p-3 text-sm text-surface placeholder:text-ink-400 focus:border-white/40 focus:outline-none"
-            />
-            <Button
-              size="lg"
-              disabled={!wish.trim() || submitting}
-              onClick={handleSubmitPrayer}
-              className="bg-surface text-ink-900 hover:bg-ink-100"
-            >
-              {submitting ? '獻上中…' : '獻上祈願'}
+            <RitualLabel>祈願</RitualLabel>
+            {/* 願望寫在紙上——這是全站少數「真的是紙」的東西之一 */}
+            <Paper className="mt-8 w-full">
+              <textarea
+                value={wish}
+                onChange={(e) => setWish(e.target.value)}
+                maxLength={200}
+                rows={5}
+                placeholder="在心中默念，或寫下您的祈願…"
+                className="w-full resize-none bg-transparent text-center font-display text-[15px] leading-loose text-paper-ink placeholder:text-paper-ink/35 focus:outline-none"
+              />
+            </Paper>
+            <Button size="lg" disabled={!wish.trim() || submitting} onClick={handleSubmitPrayer} className="mt-10">
+              {submitting ? '獻上中' : '獻上'}
             </Button>
           </motion.div>
         )}
@@ -195,26 +203,24 @@ export function WorshipPage() {
         {state === 'COMPLETED' && (
           <motion.div
             key="completed"
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: duration.ceremony, ease: ease.ceremony }}
-            className="flex flex-col items-center gap-5 text-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: duration.reveal, ease: ease.ceremony }}
+            className="flex flex-col items-center"
           >
-            <p className="font-display text-xl">祈願已獻上</p>
-            <p className="max-w-xs text-sm text-ink-300">
-              您的心願已記錄在信仰時光軸中。願此刻的平靜與您同在。
+            <RitualLabel>祈願已獻上</RitualLabel>
+            <p className="mt-8 max-w-xs text-sm leading-loose text-ash-500">
+              您的心願已記錄在信仰時光軸中。
             </p>
-            <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-              <Button onClick={() => navigate(`/fortune/${deityId}`)} className="bg-surface text-ink-900 hover:bg-ink-100">
-                順道求一支籤
-              </Button>
-              <Button variant="secondary" onClick={() => navigate('/my')} className="border-white/30 text-surface hover:border-white/60">
+            <div className="mt-16 flex flex-col items-center gap-4">
+              <Button onClick={() => navigate(`/fortune/${deityId}`)}>順道求一支籤</Button>
+              <Button variant="text" onClick={() => navigate('/my')}>
                 查看我的紀錄
               </Button>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </CeremonyScreen>
   );
 }

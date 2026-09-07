@@ -4,7 +4,7 @@ import { useAsync } from '@/lib/useAsync';
 import { faithService, MOCK_USER_ID } from '@/services';
 import { LoadingState, ErrorState, EmptyState } from '@/components/StateViews';
 import { Tabs } from '@/components/Tabs';
-import { Card } from '@/components/Card';
+import { PageScreen, PageHeading } from '@/components/screens';
 import type { CeremonyType, HistoryEntry } from '@/domain/types';
 
 type FilterValue = 'ALL' | CeremonyType;
@@ -33,70 +33,78 @@ export function MyPage() {
   }, [historyAsync, filter]);
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-8">
-      <h1 className="font-display text-xl font-medium text-ink-900">我的信仰時光軸</h1>
-      <p className="mt-1 text-sm text-ink-500">記錄您每一次的拜拜、求籤、點燈與儀式預約。</p>
+    <PageScreen>
+      <PageHeading title="信仰時光軸" description="您每一次的拜拜、求籤、點燈與儀式預約。" />
 
-      <div className="mt-4">
-        <Tabs
-          value={filter}
-          onChange={setFilter}
-          options={[
-            { value: 'ALL', label: '全部' },
-            { value: 'WORSHIP', label: '我的祈願' },
-            { value: 'FORTUNE', label: '我的籤' },
-            { value: 'LAMP', label: '我的點燈' },
-            { value: 'RITUAL', label: '我的儀式' },
-          ]}
-        />
-      </div>
+      <Tabs
+        value={filter}
+        onChange={setFilter}
+        options={[
+          { value: 'ALL', label: '全部' },
+          { value: 'WORSHIP', label: '祈願' },
+          { value: 'FORTUNE', label: '籤' },
+          { value: 'LAMP', label: '點燈' },
+          { value: 'RITUAL', label: '儀式' },
+        ]}
+      />
 
-      <div className="mt-6">
-        {historyAsync.status === 'loading' && <LoadingState label="載入信仰紀錄中…" />}
+      <div className="mt-10">
+        {historyAsync.status === 'loading' && <LoadingState label="載入中" />}
         {historyAsync.status === 'error' && <ErrorState message="無法載入紀錄" onRetry={historyAsync.retry} />}
         {historyAsync.status === 'success' && filtered.length === 0 && (
           <EmptyState
             title="這裡還沒有紀錄"
             description="從探索神明開始，您的每一次祈願都會被記錄在這裡。"
             action={
-              <Link to="/explore" className="text-sm text-ink-700 underline underline-offset-4">
+              <Link to="/explore" className="text-[13px] text-ash-300 transition-colors hover:text-ash-100">
                 前往探索
               </Link>
             }
           />
         )}
+
+        {/* 時光軸：一條垂直的線，每個節點是一個被記下來的時刻 */}
         {historyAsync.status === 'success' && filtered.length > 0 && (
-          <ol className="flex flex-col gap-3 border-l border-ink-100 pl-4">
+          <ol className="border-l border-void-line">
             {filtered.map((entry) => {
               const href = entryHref(entry);
-              const content = (
-                <Card className="p-4 transition-shadow hover:shadow-raised">
-                  <div className="flex items-center justify-between">
-                    <span className="rounded-sm bg-ink-100 px-2 py-0.5 text-xs font-medium text-ink-600">
+              const body = (
+                <>
+                  <div className="flex items-baseline gap-4">
+                    <span className="text-[11px] tracking-wide text-ash-700">
                       {TYPE_LABEL[entry.type]}
                     </span>
-                    <span className="text-xs text-ink-400">
+                    <span className="text-[11px] text-ash-700">
                       {new Date(entry.timestamp).toLocaleString('zh-TW')}
                     </span>
                   </div>
-                  <p className="mt-2 text-sm text-ink-800">{entry.summary}</p>
+                  <p className="mt-3 text-sm leading-relaxed text-ash-300">{entry.summary}</p>
                   {(entry.deityName || entry.templeName) && (
-                    <p className="mt-1 text-xs text-ink-400">
-                      {[entry.deityName, entry.templeName].filter(Boolean).join(' · ')}
+                    <p className="mt-2 text-[11px] text-ash-700">
+                      {[entry.deityName, entry.templeName].filter(Boolean).join('　')}
                     </p>
                   )}
-                </Card>
+                </>
               );
               return (
-                <li key={entry.id} className="relative -ml-[21px]">
-                  <span className="absolute left-[16px] top-6 h-2 w-2 rounded-full bg-ink-300" aria-hidden />
-                  <div className="ml-6">{href ? <Link to={href}>{content}</Link> : content}</div>
+                <li key={entry.id} className="relative py-7 pl-8">
+                  <span
+                    className="absolute -left-[3px] top-[2.4rem] h-1.5 w-1.5 rounded-full bg-ash-700"
+                    aria-hidden
+                  />
+                  {href ? (
+                    <Link to={href} className="group block">
+                      {body}
+                    </Link>
+                  ) : (
+                    body
+                  )}
                 </li>
               );
             })}
           </ol>
         )}
       </div>
-    </div>
+    </PageScreen>
   );
 }

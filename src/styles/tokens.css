@@ -1,28 +1,29 @@
 /*
-  Design Tokens — 見 docs/PAGE_SPECS.md 與 ARCHITECTURE.md 的 Design System 決策。
-  視覺方向：安靜、可信任、具東方文化底蘊；刻意不使用 gradient/glow/glassmorphism/particle。
+  Design Tokens — 視覺方向：「一座夜裡的宮廟，只有香爐和燭火發光，其他都在暗處。」
+
+  三條不可違反的規則（見 DESIGN.md）：
+  1. 一個畫面只有一個光源。
+  2. 儀式畫面置中對稱；瀏覽／管理畫面靠左不對稱。
+  3. 紙張的暖白色只出現在真的是紙的東西上（籤紙、祈願卡）。
 */
 :root {
-  /* Spacing scale (4px base) */
+  /* Spacing scale (4px base) —— 留白是這個設計的主要材料，所以尺度給得比一般 App 大 */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
-  --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
-  --space-10: 40px;
   --space-12: 48px;
   --space-16: 64px;
-  --space-20: 80px;
   --space-24: 96px;
+  --space-32: 128px;
 
-  /* Elevation (soft, low-contrast — 儀式感需要安靜而非浮誇) */
-  --elevation-0: none;
-  --elevation-1: 0 1px 2px rgba(20, 18, 16, 0.04), 0 4px 16px rgba(20, 18, 16, 0.06);
-  --elevation-2: 0 2px 4px rgba(20, 18, 16, 0.06), 0 8px 24px rgba(20, 18, 16, 0.1);
+  /* 光。這裡沒有 shadow token——夜裡的層次來自「光照到多少」，不是來自投影。 */
+  --light-ember: 217, 98, 44;
+  --light-flame: 227, 178, 107;
 
-  /* Motion tokens — 見 src/lib/motionTokens.ts 的型別對應 */
+  /* Motion */
   --duration-micro: 120ms;
   --duration-standard: 240ms;
   --duration-ceremony: 640ms;
@@ -46,6 +47,32 @@ body {
   margin: 0;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* 選取顏色也要屬於這個世界，不能是瀏覽器預設的藍 */
+::selection {
+  background: rgba(var(--light-flame), 0.25);
+  color: #f2e9d8;
+}
+
+/*
+  燭火的呼吸。唯一被允許無限循環的動畫，因為真實的火本來就不會靜止；
+  幅度刻意很小（0.92→1），避免變成「閃爍的裝飾效果」。
+*/
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.86;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+}
+
+.animate-breathe {
+  animation: breathe 4.5s var(--ease-standard) infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

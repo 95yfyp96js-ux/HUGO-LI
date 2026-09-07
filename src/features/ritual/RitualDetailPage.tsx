@@ -7,11 +7,14 @@ import { useAsync } from '@/lib/useAsync';
 import { faithService, MOCK_USER_ID } from '@/services';
 import { LoadingState, ErrorState } from '@/components/StateViews';
 import { Button } from '@/components/Button';
-import { Card } from '@/components/Card';
+import { Panel } from '@/components/Card';
 import { Disclaimer } from '@/components/Disclaimer';
 import { useToast } from '@/components/Toast';
-import { riseIn } from '@/lib/motionTokens';
+import { PageScreen } from '@/components/screens';
 import type { RitualBooking } from '@/domain/types';
+
+const FIELD_CLASS =
+  'w-full border-b border-ash-900 bg-transparent pb-3 text-sm text-ash-100 placeholder:text-ash-700 focus:border-flame/50 focus:outline-none';
 
 export function RitualDetailPage() {
   const { ritualId = '' } = useParams();
@@ -34,9 +37,22 @@ export function RitualDetailPage() {
     }
   }, [state, send]);
 
-  if (ritualAsync.status === 'loading') return <LoadingState label="載入儀式說明中…" />;
+  if (ritualAsync.status === 'loading') {
+    return (
+      <PageScreen>
+        <LoadingState label="載入中" />
+      </PageScreen>
+    );
+  }
   if (ritualAsync.status === 'error' || !ritualAsync.data) {
-    return <ErrorState message="無法載入儀式資訊" onRetry={ritualAsync.status === 'error' ? ritualAsync.retry : undefined} />;
+    return (
+      <PageScreen>
+        <ErrorState
+          message="無法載入儀式資訊"
+          onRetry={ritualAsync.status === 'error' ? ritualAsync.retry : undefined}
+        />
+      </PageScreen>
+    );
   }
   const ritual = ritualAsync.data;
 
@@ -71,118 +87,116 @@ export function RitualDetailPage() {
   }
 
   return (
-    <motion.div {...riseIn} className="mx-auto max-w-md px-4 py-10">
-      {state === 'EXPLANATION' && (
-        <>
-          <h1 className="font-display text-xl font-medium text-ink-900">{ritual.name}</h1>
-          <p className="mt-4 text-sm leading-relaxed text-ink-700">{ritual.description}</p>
-          <p className="mt-3 text-sm leading-relaxed text-ink-600">{ritual.applicabilityNotes}</p>
-          <Disclaimer className="mt-4">{ritual.disclaimer}</Disclaimer>
-          <Button size="lg" className="mt-6" onClick={() => send('NEXT')}>
-            了解適用性
-          </Button>
-        </>
-      )}
-
-      {state === 'APPLICABILITY' && (
-        <>
-          <h1 className="font-display text-xl font-medium text-ink-900">在預約前，請先確認</h1>
-          <Card className="mt-4 p-4">
-            <label className="flex items-start gap-3 text-sm text-ink-700">
-              <input
-                type="checkbox"
-                checked={acknowledged}
-                onChange={(e) => setAcknowledged(e.target.checked)}
-                className="mt-1"
-              />
-              <span>
-                我了解此儀式須由寺廟人員現場執行，本平台僅提供說明與預約入口，不保證任何消災、改運或治療效果。
-              </span>
-            </label>
-          </Card>
-          <Button size="lg" className="mt-6" disabled={!acknowledged} onClick={() => send('ACKNOWLEDGE')}>
-            繼續預約
-          </Button>
-        </>
-      )}
-
-      {state === 'FORM' && (
-        <>
-          <h1 className="font-display text-xl font-medium text-ink-900">填寫聯絡資訊</h1>
-          <div className="mt-4 flex flex-col gap-3">
-            <input
-              value={contactName}
-              onChange={(e) => setContactName(e.target.value)}
-              placeholder="聯絡人姓名"
-              className="rounded-md border border-ink-200 p-3 text-sm focus:border-ink-500 focus:outline-none"
-            />
-            <input
-              value={contactPhone}
-              onChange={(e) => setContactPhone(e.target.value)}
-              placeholder="聯絡電話"
-              inputMode="tel"
-              className="rounded-md border border-ink-200 p-3 text-sm focus:border-ink-500 focus:outline-none"
-            />
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="（選填）想補充說明的狀況"
-              rows={3}
-              className="rounded-md border border-ink-200 p-3 text-sm focus:border-ink-500 focus:outline-none"
-            />
-          </div>
-          <Button
-            size="lg"
-            className="mt-6"
-            disabled={!contactName.trim() || !contactPhone.trim()}
-            onClick={() => send('SUBMIT_FORM')}
-          >
-            下一步
-          </Button>
-        </>
-      )}
-
-      {state === 'CONFIRM' && (
-        <>
-          <h1 className="font-display text-xl font-medium text-ink-900">確認預約資訊</h1>
-          <Card className="mt-4 p-4">
-            <p className="text-sm text-ink-700">儀式：{ritual.name}</p>
-            <p className="mt-1 text-sm text-ink-700">聯絡人：{contactName}</p>
-            <p className="mt-1 text-sm text-ink-700">電話：{contactPhone}</p>
-            {note && <p className="mt-1 text-sm text-ink-700">備註：{note}</p>}
-          </Card>
-          <Disclaimer className="mt-4">
-            送出後為「待寺廟確認」狀態，本平台不代表寺廟做出任何效果承諾。
-          </Disclaimer>
-          <Button size="lg" className="mt-6" disabled={submitting} onClick={handleConfirmBooking}>
-            {submitting ? '送出中…' : '送出預約'}
-          </Button>
-        </>
-      )}
-
-      {(state === 'PROCESSING' || state === 'COMPLETED') && (
-        <div className="flex flex-col items-center gap-4 py-10 text-center">
-          <div className="h-6 w-6 animate-spin rounded-full border-2 border-ink-200 border-t-ink-600" />
-          <p className="text-sm text-ink-500">正在送出您的預約…</p>
-        </div>
-      )}
-
-      {state === 'RECORD' && booking && (
-        <div className="flex flex-col items-center gap-4 py-10 text-center">
-          <p className="font-display text-lg text-ink-900">預約已送出</p>
-          <p className="max-w-xs text-sm text-ink-500">
-            狀態：待寺廟確認。已記錄在您的信仰時光軸中，寺廟聯繫方式與後續流程屬於未來真實串接範圍。
-          </p>
-          <div className="mt-2 flex gap-2">
-            <Link to="/my">
-              <Button>查看我的紀錄</Button>
-            </Link>
-            <Button variant="secondary" onClick={() => navigate('/ritual')}>
-              回到儀式列表
+    <PageScreen light={{ source: 'flame', x: 4, y: -10, radius: 40, intensity: 0.07 }}>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }}>
+        {state === 'EXPLANATION' && (
+          <>
+            <h1 className="font-display text-2xl font-medium tracking-wide text-ash-100">{ritual.name}</h1>
+            <p className="mt-8 max-w-md text-sm leading-loose text-ash-300">{ritual.description}</p>
+            <p className="mt-6 max-w-md text-sm leading-loose text-ash-500">{ritual.applicabilityNotes}</p>
+            <Disclaimer className="mt-8">{ritual.disclaimer}</Disclaimer>
+            <Button variant="quiet" size="lg" className="mt-12" onClick={() => send('NEXT')}>
+              了解適用性
             </Button>
-          </div>
-        </div>
-      )}
-    </motion.div>
+          </>
+        )}
+
+        {state === 'APPLICABILITY' && (
+          <>
+            <h1 className="font-display text-xl font-medium tracking-wide text-ash-100">在預約前，請先確認</h1>
+            <Panel className="mt-8">
+              <label className="flex items-start gap-4 text-sm leading-relaxed text-ash-300">
+                <input
+                  type="checkbox"
+                  checked={acknowledged}
+                  onChange={(e) => setAcknowledged(e.target.checked)}
+                  className="mt-1.5 accent-flame"
+                />
+                <span>
+                  我了解此儀式須由寺廟人員現場執行，本平台僅提供說明與預約入口，不保證任何消災、改運或治療效果。
+                </span>
+              </label>
+            </Panel>
+            <Button variant="quiet" size="lg" className="mt-12" disabled={!acknowledged} onClick={() => send('ACKNOWLEDGE')}>
+              繼續預約
+            </Button>
+          </>
+        )}
+
+        {state === 'FORM' && (
+          <>
+            <h1 className="font-display text-xl font-medium tracking-wide text-ash-100">填寫聯絡資訊</h1>
+            <div className="mt-10 flex max-w-sm flex-col gap-8">
+              <input
+                value={contactName}
+                onChange={(e) => setContactName(e.target.value)}
+                placeholder="聯絡人姓名"
+                className={FIELD_CLASS}
+              />
+              <input
+                value={contactPhone}
+                onChange={(e) => setContactPhone(e.target.value)}
+                placeholder="聯絡電話"
+                inputMode="tel"
+                className={FIELD_CLASS}
+              />
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="（選填）想補充說明的狀況"
+                rows={3}
+                className={FIELD_CLASS + ' resize-none'}
+              />
+            </div>
+            <Button
+              variant="quiet"
+              size="lg"
+              className="mt-12"
+              disabled={!contactName.trim() || !contactPhone.trim()}
+              onClick={() => send('SUBMIT_FORM')}
+            >
+              下一步
+            </Button>
+          </>
+        )}
+
+        {state === 'CONFIRM' && (
+          <>
+            <h1 className="font-display text-xl font-medium tracking-wide text-ash-100">確認預約資訊</h1>
+            <Panel className="mt-8 max-w-sm space-y-3 text-sm text-ash-300">
+              <p>儀式　{ritual.name}</p>
+              <p>聯絡人　{contactName}</p>
+              <p>電話　{contactPhone}</p>
+              {note && <p>備註　{note}</p>}
+            </Panel>
+            <Disclaimer className="mt-8">
+              送出後為「待寺廟確認」狀態，本平台不代表寺廟做出任何效果承諾。
+            </Disclaimer>
+            <Button variant="quiet" size="lg" className="mt-12" disabled={submitting} onClick={handleConfirmBooking}>
+              {submitting ? '送出中' : '送出預約'}
+            </Button>
+          </>
+        )}
+
+        {(state === 'PROCESSING' || state === 'COMPLETED') && <LoadingState label="送出中" />}
+
+        {state === 'RECORD' && booking && (
+          <>
+            <h1 className="font-display text-xl font-medium tracking-wide text-ash-100">預約已送出</h1>
+            <p className="mt-8 max-w-md text-sm leading-loose text-ash-500">
+              狀態：待寺廟確認。已記錄在您的信仰時光軸中。寺廟聯繫方式與後續流程屬於未來真實串接範圍。
+            </p>
+            <div className="mt-12 flex items-center gap-8">
+              <Link to="/my" className="text-[13px] text-ash-300 transition-colors hover:text-ash-100">
+                查看我的紀錄
+              </Link>
+              <Link to="/ritual" className="text-[13px] text-ash-700 transition-colors hover:text-ash-300">
+                回到儀式列表
+              </Link>
+            </div>
+          </>
+        )}
+      </motion.div>
+    </PageScreen>
   );
 }

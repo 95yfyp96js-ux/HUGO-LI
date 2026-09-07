@@ -10,6 +10,7 @@
 - [COMPETITIVE_ATTACK_REPORT.md](./COMPETITIVE_ATTACK_REPORT.md) — 競品攻擊與商業風險
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — 技術決策、Domain Model、IA、State Machine
 - [CHANGELOG.md](./CHANGELOG.md) — 重大變更紀錄
+- [DESIGN.md](./DESIGN.md) — 視覺方向與四條設計規則（一個光源／對稱與否／紙的用法／不用裝飾圖案）
 - [SECURITY.md](./SECURITY.md) — 安全審查與宗教內容安全規則
 - [docs/PAGE_SPECS.md](./docs/PAGE_SPECS.md) — 每頁面 Purpose/State 定義
 

@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { riseIn } from '@/lib/motionTokens';
+import { PageScreen } from '@/components/screens';
 import type { DeityDomain } from '@/domain/types';
 
 const NEEDS: { domain: DeityDomain; description: string }[] = [
@@ -14,44 +14,52 @@ const NEEDS: { domain: DeityDomain; description: string }[] = [
 
 export function HomePage() {
   return (
-    <div className="mx-auto max-w-3xl px-4 py-10 md:py-16">
-      <motion.div {...riseIn}>
-        <p className="text-sm text-ink-500">信仰時光 · 原型 · 全部內容為 Mock Data</p>
-        <h1 className="mt-2 font-display text-2xl font-medium text-ink-900 md:text-3xl">
-          此刻，想從哪個心願開始？
+    <PageScreen>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+      >
+        <p className="text-[11px] tracking-ritual text-ash-700">原型 · 全部內容為 MOCK DATA</p>
+        <h1 className="mt-8 font-display text-[26px] font-medium leading-relaxed tracking-wide text-ash-100 md:text-3xl">
+          此刻，
+          <br />
+          想從哪個心願開始？
         </h1>
-        <p className="mt-3 max-w-lg text-sm leading-relaxed text-ink-600">
-          選擇最貼近此刻心境的需求，我們會為您找到合適的神明空間，開始線上拜拜、祈願或求籤。
-        </p>
       </motion.div>
 
-      <div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-3">
+      {/* 需求清單：沒有卡片、沒有格線，只有字級對比與留白 */}
+      <ul className="mt-16">
         {NEEDS.map((need, index) => (
-          <motion.div
+          <motion.li
             key={need.domain}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.24, delay: index * 0.04, ease: [0.16, 1, 0.3, 1] }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.5, delay: 0.15 + index * 0.06 }}
           >
             <Link
               to={`/explore?need=${encodeURIComponent(need.domain)}`}
-              className="flex h-full flex-col justify-between rounded-lg border border-ink-100 bg-surface-raised p-4 shadow-soft transition-shadow hover:shadow-raised"
+              className="group flex items-baseline gap-5 border-b border-void-line py-5 transition-colors duration-200"
             >
-              <p className="font-display text-base font-medium text-ink-900">{need.domain}</p>
-              <p className="mt-2 text-xs text-ink-500">{need.description}</p>
+              <span className="font-display text-lg text-ash-300 transition-colors duration-200 group-hover:text-flame-core">
+                {need.domain}
+              </span>
+              <span className="text-xs text-ash-700 transition-colors duration-200 group-hover:text-ash-500">
+                {need.description}
+              </span>
             </Link>
-          </motion.div>
+          </motion.li>
         ))}
-      </div>
+      </ul>
 
-      <div className="mt-10 flex flex-col gap-2 border-t border-ink-100 pt-6 text-sm">
-        <Link to="/explore" className="text-ink-700 underline underline-offset-4 hover:text-ink-900">
-          直接探索所有神明與寺廟 →
+      <div className="mt-14 flex flex-col gap-4 text-[13px]">
+        <Link to="/explore" className="text-ash-500 transition-colors hover:text-ash-100">
+          直接探索所有神明與寺廟
         </Link>
-        <Link to="/my" className="text-ink-700 underline underline-offset-4 hover:text-ink-900">
-          查看我的信仰紀錄 →
+        <Link to="/my" className="text-ash-500 transition-colors hover:text-ash-100">
+          查看我的信仰紀錄
         </Link>
       </div>
-    </div>
+    </PageScreen>
   );
 }

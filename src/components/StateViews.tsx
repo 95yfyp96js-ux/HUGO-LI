@@ -1,15 +1,21 @@
 import type { ReactNode } from 'react';
 import { Button } from './Button';
 
-export function LoadingState({ label = '載入中…' }: { label?: string }) {
+/**
+ * Loading／Empty／Error 在夜裡的樣子。
+ * 沒有 spinner 圓圈——轉圈的 loading 是白天 App 的語彙，而且會變成一個動來動去的亮點。
+ * 這裡用一顆呼吸的餘燼：它就是這個畫面暫時的光。
+ */
+export function LoadingState({ label = '載入中' }: { label?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 py-16 text-ink-500">
+    <div className="flex flex-col items-center gap-5 py-20 text-center">
       <div
-        className="h-6 w-6 animate-spin rounded-full border-2 border-ink-200 border-t-ink-600"
+        className="animate-breathe h-1.5 w-1.5 rounded-full bg-ember"
         role="status"
         aria-label={label}
+        style={{ boxShadow: '0 0 12px 3px rgba(var(--light-ember), 0.5)' }}
       />
-      <p className="text-sm">{label}</p>
+      <p className="text-xs tracking-wide text-ash-500">{label}</p>
     </div>
   );
 }
@@ -24,10 +30,10 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-ink-200 py-16 text-center">
-      <p className="text-base font-medium text-ink-800">{title}</p>
-      {description && <p className="max-w-xs text-sm text-ink-500">{description}</p>}
-      {action}
+    <div className="py-16">
+      <p className="font-display text-base text-ash-300">{title}</p>
+      {description && <p className="mt-3 max-w-sm text-sm leading-relaxed text-ash-500">{description}</p>}
+      {action && <div className="mt-6">{action}</div>}
     </div>
   );
 }
@@ -40,10 +46,10 @@ export function ErrorState({
   onRetry?: () => void;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-ember-200 bg-ember-50 py-12 text-center">
-      <p className="text-sm text-ember-700">{message}</p>
+    <div className="border-l border-ember-deep py-6 pl-5">
+      <p className="text-sm text-ash-300">{message}</p>
       {onRetry && (
-        <Button variant="secondary" size="md" onClick={onRetry}>
+        <Button variant="quiet" size="md" className="mt-4" onClick={onRetry}>
           重試
         </Button>
       )}

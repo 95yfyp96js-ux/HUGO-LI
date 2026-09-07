@@ -5,7 +5,7 @@ import { duration, ease } from '@/lib/motionTokens';
 interface ToastItem {
   id: number;
   message: string;
-  tone: 'default' | 'success' | 'error';
+  tone: 'default' | 'error';
 }
 
 interface ToastContextValue {
@@ -28,22 +28,20 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ show }}>
       {children}
-      <div className="pointer-events-none fixed inset-x-0 bottom-24 z-50 flex flex-col items-center gap-2 px-4 md:bottom-8">
+      <div className="pointer-events-none fixed inset-x-0 bottom-24 z-50 flex flex-col items-center gap-2 px-6 md:bottom-10">
         <AnimatePresence>
           {toasts.map((toast) => (
             <motion.div
               key={toast.id}
-              initial={{ opacity: 0, y: 8 }}
+              initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
+              exit={{ opacity: 0 }}
               transition={{ duration: duration.standard, ease: ease.settle }}
               className={
-                'pointer-events-auto rounded-md px-4 py-2 text-sm shadow-raised ' +
+                'pointer-events-auto border bg-void-raised px-5 py-3 text-[13px] tracking-wide ' +
                 (toast.tone === 'error'
-                  ? 'bg-ember-600 text-surface'
-                  : toast.tone === 'success'
-                    ? 'bg-jade-700 text-surface'
-                    : 'bg-ink-900 text-surface')
+                  ? 'border-ember-deep text-ash-100'
+                  : 'border-void-line text-ash-300')
               }
             >
               {toast.message}
