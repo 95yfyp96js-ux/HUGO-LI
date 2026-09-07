@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "seed": "tsx prisma/seed.ts",
     "reconcile": "tsx scripts/reconcile.ts",
+    "export:snapshot": "tsx scripts/exportSnapshot.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },

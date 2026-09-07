@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, tokenStore } from "./api";
+import { IS_SNAPSHOT } from "./snapshot";
 
 export interface CurrentUser {
   id: string;
@@ -24,6 +25,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Static preview: there is no server to authenticate against, so the
+    // recorded admin identity is used directly.
+    if (IS_SNAPSHOT) {
+      api<CurrentUser>("/api/auth/me")
+        .then(setUser)
+        .catch(() => setUser(null))
+        .finally(() => setLoading(false));
+      return;
+    }
+
     if (!tokenStore.get()) {
       setLoading(false);
       return;
@@ -44,6 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    if (IS_SNAPSHOT) return; // nothing to sign out of in the static preview
     tokenStore.clear();
     setUser(null);
     window.location.href = "/login";

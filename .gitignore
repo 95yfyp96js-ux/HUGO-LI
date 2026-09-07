@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-preview/
 *.db
 *.db-journal
 .env
@@ -9,3 +10,9 @@ playwright-report/
 test-results/
 web/test-results/
 web/playwright-report/
+
+# Compiled output must never sit beside TypeScript sources: Vite resolves
+# .js before .ts and would silently bundle a stale build.
+web/src/**/*.js
+web/src/**/*.jsx
+web/e2e/**/*.js

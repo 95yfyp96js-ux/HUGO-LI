@@ -1,3 +1,5 @@
+import { IS_SNAPSHOT, lookup } from "./snapshot";
+
 export interface ApiError {
   code: string;
   message: string;
@@ -41,6 +43,11 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   const url = new URL(path, window.location.origin);
   for (const [key, value] of Object.entries(options.query ?? {})) {
     if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
+  }
+
+  // Static preview build: serve recorded responses instead of calling an API.
+  if (IS_SNAPSHOT) {
+    return lookup(options.method ?? "GET", `${url.pathname}${url.search}`) as T;
   }
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };

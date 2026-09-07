@@ -45,6 +45,17 @@ what is available.
 | `npm run build` | Builds API and UI |
 | `npm run seed` | Rebuilds the demo portfolio |
 | `npm run reconcile --workspace server` | Replays every loan's ledger and checks it against stored balances |
+| `npm run export:snapshot --workspace server` | Records every read API response (needs the API running) |
+| `npm run build:preview --workspace web` | Builds a single-file, read-only static preview from that snapshot |
+
+### Static preview
+
+`build:preview` produces `web/dist-preview/preview.html`: the real UI bundled
+with recorded API responses instead of a server, for sharing where the stack
+cannot be run. The figures in it are genuine engine output frozen at export
+time; every write path is refused rather than faked, and the page says so.
+Regenerate it with `npm run seed`, start the API, then `export:snapshot`
+followed by `build:preview`.
 
 ## Layout
 

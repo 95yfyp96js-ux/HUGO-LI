@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../lib/auth";
+import { IS_SNAPSHOT } from "../lib/snapshot";
 
 interface NavItem {
   to: string;
@@ -119,9 +120,11 @@ export function Layout() {
               <div className="text-sm font-medium text-slate-900">{user?.displayName}</div>
               <div className="text-xs text-slate-500">{user?.roles.join(", ")}</div>
             </div>
-            <button onClick={logout} className="btn-secondary text-xs">
-              登出
-            </button>
+            {!IS_SNAPSHOT && (
+              <button onClick={logout} className="btn-secondary text-xs">
+                登出
+              </button>
+            )}
           </div>
         </header>
 
@@ -145,6 +148,16 @@ export function Layout() {
                   {item.label}
                 </NavLink>
               ))}
+          </div>
+        )}
+
+        {IS_SNAPSHOT && (
+          <div className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900 lg:px-8">
+            <span className="font-semibold">唯讀展示版本。</span>
+            畫面上的金額、利率、期程與 KPI 都是後端引擎實際計算後匯出的快照，
+            但新增、審核、撥款、收款等寫入操作在此版本無法執行。完整可操作系統請在本機執行
+            <code className="mx-1 rounded bg-amber-100 px-1 py-0.5">npm run dev:server</code>與
+            <code className="mx-1 rounded bg-amber-100 px-1 py-0.5">npm run dev:web</code>。
           </div>
         )}
 
