@@ -10,6 +10,13 @@ import {
   requireIdempotencyKey,
   requirePermission,
 } from "./middleware.js";
+import {
+  DEFAULT_RATE_LIMITS,
+  byIp,
+  byUser,
+  createRateLimiter,
+  type RateLimitSettings,
+} from "./rateLimit.js";
 
 const num = (value: unknown, fallback?: number): number | undefined => {
   if (value === undefined || value === "") return fallback;
@@ -17,12 +24,38 @@ const num = (value: unknown, fallback?: number): number | undefined => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
-export function createRoutes(container: Container): Router {
+export function createRoutes(
+  container: Container,
+  rateLimits: RateLimitSettings = DEFAULT_RATE_LIMITS
+): Router {
   const router = Router();
+
+  // Login is limited by source address rather than by account: limiting per
+  // account would let anyone lock a known user out by guessing at them.
+  const authLimit = createRateLimiter({
+    ...rateLimits.auth,
+    name: "auth",
+    keyFn: byIp,
+    clock: container.clock,
+  });
+  // Money-moving and configuration writes are limited per acting user.
+  const financialLimit = createRateLimiter({
+    ...rateLimits.financial,
+    name: "financial",
+    keyFn: byUser,
+    clock: container.clock,
+  });
+  const adminLimit = createRateLimiter({
+    ...rateLimits.admin,
+    name: "admin",
+    keyFn: byUser,
+    clock: container.clock,
+  });
 
   // ---------------------------------------------------------------- auth
   router.post(
     "/auth/login",
+    authLimit.middleware,
     asyncHandler(async (req, res) => {
       const { email, password } = req.body ?? {};
       if (!email || !password) throw new ValidationError("email and password are required");
@@ -298,6 +331,7 @@ export function createRoutes(container: Container): Router {
 
   router.post(
     "/loans/:id/disburse",
+    financialLimit.middleware,
     requirePermission("LOAN_DISBURSE"),
     asyncHandler(async (req, res) => {
       const idempotencyKey = requireIdempotencyKey(req);
@@ -312,6 +346,7 @@ export function createRoutes(container: Container): Router {
 
   router.post(
     "/loans/:id/renew",
+    financialLimit.middleware,
     requirePermission("LOAN_RENEW"),
     asyncHandler(async (req, res) => {
       requireIdempotencyKey(req);
@@ -321,6 +356,7 @@ export function createRoutes(container: Container): Router {
 
   router.post(
     "/loans/:id/extend",
+    financialLimit.middleware,
     requirePermission("LOAN_EXTEND"),
     asyncHandler(async (req, res) => {
       res.status(201).json(await container.renewals.extend(req.params.id!, req.body, auditContext(req)));
@@ -338,6 +374,7 @@ export function createRoutes(container: Container): Router {
   // Settlement here is an explicit final payment for the whole balance.
   router.post(
     "/loans/:id/settle",
+    financialLimit.middleware,
     requirePermission("LOAN_SETTLE"),
     asyncHandler(async (req, res) => {
       const idempotencyKey = requireIdempotencyKey(req);
@@ -397,6 +434,7 @@ export function createRoutes(container: Container): Router {
 
   router.post(
     "/payments",
+    financialLimit.middleware,
     requirePermission("PAYMENT_CREATE"),
     asyncHandler(async (req, res) => {
       const idempotencyKey = requireIdempotencyKey(req);
@@ -410,6 +448,7 @@ export function createRoutes(container: Container): Router {
 
   router.post(
     "/payments/:id/reverse",
+    financialLimit.middleware,
     requirePermission("PAYMENT_REVERSE"),
     asyncHandler(async (req, res) => {
       res.json(await container.payments.reverse(req.params.id!, req.body?.reason, auditContext(req)));
@@ -530,6 +569,7 @@ export function createRoutes(container: Container): Router {
 
   router.post(
     "/products",
+    adminLimit.middleware,
     requirePermission("PRODUCT_UPDATE"),
     asyncHandler(async (req, res) => {
       res.status(201).json(await container.products.create(req.body, auditContext(req)));
@@ -552,6 +592,7 @@ export function createRoutes(container: Container): Router {
 
   router.patch(
     "/products/:id",
+    adminLimit.middleware,
     requirePermission("PRODUCT_UPDATE"),
     asyncHandler(async (req, res) => {
       res.json(await container.products.update(req.params.id!, req.body, auditContext(req)));

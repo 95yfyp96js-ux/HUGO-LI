@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PrismaClient } from "@prisma/client";
-import { createApp } from "../../src/app.js";
+import { createApp, type AppOptions } from "../../src/app.js";
 import { MockClock } from "../../src/shared/clock.js";
 import { hashPassword } from "../../src/modules/auth/infrastructure/password.js";
 import { ROLE_PERMISSIONS, PERMISSIONS, type RoleCode } from "../../src/modules/auth/domain/permissions.js";
@@ -15,7 +15,10 @@ export const TEST_PASSWORD = "TestPassword123!";
  * Each test file gets its own throwaway SQLite database and a MockClock, so
  * tests are isolated and can drive time forward deterministically.
  */
-export async function createTestEnv(startDate = new Date("2026-01-01T09:00:00Z")) {
+export async function createTestEnv(
+  startDate = new Date("2026-01-01T09:00:00Z"),
+  options: { rateLimits?: AppOptions["rateLimits"] } = {}
+) {
   const dir = mkdtempSync(join(tmpdir(), "lending-test-"));
   const dbPath = join(dir, "test.db");
   const databaseUrl = `file:${dbPath}`;
@@ -28,7 +31,18 @@ export async function createTestEnv(startDate = new Date("2026-01-01T09:00:00Z")
 
   const db = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
   const clock = new MockClock(startDate);
-  const { app, container } = createApp({ db, clock, jwtSecret: "test-secret" });
+  const { app, container } = createApp({
+    db,
+    clock,
+    jwtSecret: "test-secret",
+    // Generous by default so unrelated tests are never throttled; the
+    // rate-limit tests pass tight values of their own.
+    rateLimits: options.rateLimits ?? {
+      auth: { limit: 10_000, windowMs: 60_000 },
+      financial: { limit: 10_000, windowMs: 60_000 },
+      admin: { limit: 10_000, windowMs: 60_000 },
+    },
+  });
 
   const users = await seedUsersAndProducts(db);
 
