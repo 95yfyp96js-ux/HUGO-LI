@@ -1,8 +1,17 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { percent, termRange, REPAYMENT_METHOD_LABELS } from "../lib/format";
 import { DataTable, ErrorBanner, Loading, Money, PageHeader, StatusBadge } from "../components/ui";
+import { useAuth } from "../lib/auth";
+import {
+  EMPTY_PRODUCT_FORM,
+  ProductForm,
+  productFormToPayload,
+  validateProductForm,
+  type ProductFormValues,
+} from "../components/ProductForm";
 
 export interface Product {
   id: string;
@@ -24,16 +33,50 @@ export interface Product {
 }
 
 export function ProductsPage() {
+  const { can } = useAuth();
+  const queryClient = useQueryClient();
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState<ProductFormValues>(EMPTY_PRODUCT_FORM);
+  const [validationError, setValidationError] = useState<string | null>(null);
+
   const { data, isLoading, error } = useQuery({
     queryKey: ["products", "all"],
     queryFn: () => api<{ items: Product[] }>("/api/products"),
   });
 
+  const createMutation = useMutation({
+    mutationFn: () => api<Product>("/api/products", { method: "POST", body: productFormToPayload(form) }),
+    onSuccess: () => {
+      setCreating(false);
+      setForm(EMPTY_PRODUCT_FORM);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
+  });
+
+  function openCreate() {
+    setForm(EMPTY_PRODUCT_FORM);
+    setValidationError(null);
+    setCreating(true);
+  }
+
+  function submitCreate() {
+    const message = validateProductForm(form);
+    setValidationError(message);
+    if (!message) createMutation.mutate();
+  }
+
   return (
     <div>
       <PageHeader
         title="放款產品"
-        subtitle="修改利率或費用會建立新版本並封存舊版本，既有放款條件不受影響"
+        subtitle="修改條件會建立新版本並封存舊版本，既有放款條件不受影響"
+        actions={
+          can("PRODUCT_UPDATE") && (
+            <button className="btn-primary" onClick={openCreate}>
+              新增產品
+            </button>
+          )
+        }
       />
 
       <ErrorBanner error={error} />
@@ -77,6 +120,35 @@ export function ProductsPage() {
             },
           ]}
         />
+      )}
+
+      {creating && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-6">
+            <h2 className="text-lg font-semibold">新增產品</h2>
+            <p className="mt-1 text-sm text-slate-500">建立後即為 v1，上架狀態為 ACTIVE。</p>
+
+            <div className="mt-4">
+              <ProductForm values={form} onChange={setForm} codeEditable idPrefix="new-product" />
+            </div>
+
+            {validationError && <p className="mt-3 text-sm text-rose-600">{validationError}</p>}
+            <ErrorBanner error={createMutation.error} />
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="btn-secondary" onClick={() => setCreating(false)}>
+                取消
+              </button>
+              <button
+                className="btn-primary"
+                onClick={submitCreate}
+                disabled={createMutation.isPending}
+              >
+                {createMutation.isPending ? "建立中…" : "建立產品"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

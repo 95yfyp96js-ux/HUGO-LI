@@ -95,6 +95,21 @@ export class ProductService {
     if (input.settlementPolicy && !isSettlementPolicy(input.settlementPolicy)) {
       throw new ValidationError("Unknown settlementPolicy", { settlementPolicy: input.settlementPolicy });
     }
+    if (!input.productCode?.trim()) throw new ValidationError("productCode is required");
+    if (!input.name?.trim()) throw new ValidationError("name is required");
+    if (!input.repaymentMethod) throw new ValidationError("repaymentMethod is required");
+
+    // A new product always starts at version 1, so a repeated code collides
+    // with the unique (productCode, version) index. Checked up front for a
+    // clear message rather than surfacing the raw constraint error.
+    const existingCode = await this.db.loanProduct.findFirst({
+      where: { productCode: input.productCode },
+    });
+    if (existingCode) {
+      throw new ValidationError("A product with this code already exists", {
+        productCode: input.productCode,
+      });
+    }
 
     const product = await this.db.loanProduct.create({
       data: {

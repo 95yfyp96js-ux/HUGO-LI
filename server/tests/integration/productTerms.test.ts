@@ -3,6 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestEnv, ctx } from "../helpers/testEnv.js";
 import { Money } from "../../src/shared/money.js";
 import { RepaymentEngine, periodRate } from "../../src/modules/repayment/domain/repaymentEngine.js";
+import request from "supertest";
+import { TEST_PASSWORD } from "../helpers/testEnv.js";
 
 let env: Awaited<ReturnType<typeof createTestEnv>>;
 beforeAll(async () => {
@@ -251,5 +253,114 @@ describe("product versioning", () => {
 
   it("offers simple interest only", async () => {
     await expect(dailyProduct({ calculationMethod: "COMPOUND" })).rejects.toThrow(/SIMPLE_INTEREST/);
+  });
+
+  it("refuses a second product under a code already in use", async () => {
+    const code = `DAY-${randomUUID().slice(0, 8)}`;
+    await dailyProduct({ productCode: code });
+    await expect(dailyProduct({ productCode: code })).rejects.toThrow(/already exists/);
+  });
+});
+
+describe("manager creates a product over the real API", () => {
+  async function login(role: string) {
+    const response = await request(env.app)
+      .post("/api/auth/login")
+      .send({ email: `${role.toLowerCase()}@test.local`, password: TEST_PASSWORD })
+      .expect(200);
+    return response.body.token as string;
+  }
+
+  it("lets a manager create a new product through the HTTP route", async () => {
+    const token = await login("MANAGER");
+    const code = `DAY-${randomUUID().slice(0, 8)}`;
+
+    const created = await request(env.app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        productCode: code,
+        name: "經理新增的短天期商品",
+        minAmount: 10000,
+        maxAmount: 200000,
+        minTermCount: 7,
+        maxTermCount: 30,
+        termUnit: "DAY",
+        ratePercent: 0.1,
+        rateUnit: "DAILY",
+        repaymentMethod: "BULLET",
+      })
+      .expect(201);
+    expect(created.body.productCode).toBe(code);
+    expect(created.body.version).toBe(1);
+  });
+
+  it("still forbids a loan officer from creating a product", async () => {
+    const token = await login("LOAN_OFFICER");
+    const response = await request(env.app)
+      .post("/api/products")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        productCode: `DAY-${randomUUID().slice(0, 8)}`,
+        name: "不該成功",
+        minAmount: 10000,
+        maxAmount: 200000,
+        minTermCount: 7,
+        maxTermCount: 30,
+        ratePercent: 0.1,
+        rateUnit: "DAILY",
+        repaymentMethod: "BULLET",
+      })
+      .expect(403);
+    expect(response.body.code).toBe("INSUFFICIENT_PERMISSION");
+  });
+
+  it("lets a manager edit amount, term range, term unit and repayment method together — creating one new version", async () => {
+    const token = await login("MANAGER");
+    const product = await dailyProduct();
+
+    const updated = await request(env.app)
+      .patch(`/api/products/${product.id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        maxAmount: 250000,
+        minTermCount: 5,
+        maxTermCount: 45,
+        repaymentMethod: "INTEREST_ONLY",
+      })
+      .expect(200);
+
+    expect(updated.body.version).toBe(2);
+    expect(updated.body.id).not.toBe(product.id);
+    // The PATCH route returns the raw stored row (minor units), matching what
+    // the existing rate-only edit already relied on; the formatted major-unit
+    // view comes from GET, exercised below via the detail fetch.
+    expect(updated.body.maxAmountCents).toBe(Money.fromMajorUnits(250000).toMinorUnits());
+    expect(updated.body.minTermCount).toBe(5);
+    expect(updated.body.maxTermCount).toBe(45);
+    expect(updated.body.repaymentMethod).toBe("INTEREST_ONLY");
+
+    const fetched = await request(env.app)
+      .get(`/api/products/${updated.body.id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .expect(200);
+    expect(fetched.body.maxAmount).toBe("250000.00");
+
+    const original = await env.db.loanProduct.findUniqueOrThrow({ where: { id: product.id } });
+    expect(original.status).toBe("ARCHIVED");
+    expect(original.maxAmountCents).toBe(Money.fromMajorUnits(200000).toMinorUnits());
+  });
+
+  it("does not reprice an existing monthly loan when a new daily product is created", async () => {
+    const monthly = await env.container.products.list({ status: "ACTIVE" });
+    const monthlyProduct = monthly.find((p) => p.rateUnit === "MONTHLY")!;
+    const before = { ...monthlyProduct };
+
+    await dailyProduct();
+
+    const after = await env.db.loanProduct.findUniqueOrThrow({ where: { id: monthlyProduct.id } });
+    expect(after.ratePercent).toBe(before.ratePercent);
+    expect(after.version).toBe(before.version);
+    expect(after.status).toBe(before.status);
   });
 });

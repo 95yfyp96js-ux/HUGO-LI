@@ -64,6 +64,11 @@ export const ROLE_PERMISSIONS: Record<RoleCode, Permission[]> = {
     "PAYMENT_CREATE",
     "PAYMENT_REVERSE",
     "COLLECTION_UPDATE",
+    // Product design (new products, repricing existing ones) is a branch
+    // decision, not a system-administration one, so it sits with MANAGER
+    // rather than only ADMIN. Every change still versions rather than
+    // editing a live product in place (see productService.update).
+    "PRODUCT_UPDATE",
     "AUDIT_READ",
   ],
 

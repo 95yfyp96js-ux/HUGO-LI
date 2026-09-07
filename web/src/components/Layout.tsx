@@ -31,6 +31,7 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
   {
     title: "帳務",
     items: [
+      { to: "/payments/due-today", label: "今日應收", icon: "📅", permission: "PAYMENT_READ" },
       { to: "/payments", label: "收款紀錄", icon: "🧾", permission: "PAYMENT_READ" },
       { to: "/collections", label: "催收", icon: "📞", permission: "COLLECTION_READ" },
       { to: "/renewals", label: "續借紀錄", icon: "🔁", permission: "LOAN_READ" },

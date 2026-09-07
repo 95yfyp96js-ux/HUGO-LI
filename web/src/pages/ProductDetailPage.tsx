@@ -3,6 +3,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { date, percent, termNoun, termRange, REPAYMENT_METHOD_LABELS } from "../lib/format";
+import {
+  ProductForm,
+  productFormToPayload,
+  validateProductForm,
+  type ProductFormValues,
+} from "../components/ProductForm";
 import { ErrorBanner, Field, Loading, Money, PageHeader, StatusBadge } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import type { Product } from "./ProductsPage";
@@ -13,7 +19,8 @@ export function ProductDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
-  const [rate, setRate] = useState("");
+  const [form, setForm] = useState<ProductFormValues | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["product", id],
@@ -21,15 +28,43 @@ export function ProductDetailPage() {
   });
 
   const mutation = useMutation({
-    mutationFn: () =>
-      api<Product>(`/api/products/${id}`, { method: "PATCH", body: { ratePercent: Number(rate) } }),
+    mutationFn: () => {
+      if (!form) throw new Error("form not initialised");
+      return api<Product>(`/api/products/${id}`, { method: "PATCH", body: productFormToPayload(form) });
+    },
     onSuccess: (updated) => {
       setEditing(false);
       queryClient.invalidateQueries({ queryKey: ["products"] });
-      // Repricing produces a new version with a new id.
+      // Any of these fields versions the product: saving produces a new id.
       navigate(`/products/${updated.id}`);
     },
   });
+
+  function openEdit() {
+    if (!data) return;
+    setForm({
+      productCode: data.productCode,
+      name: data.name,
+      description: data.description ?? "",
+      minAmount: data.minAmount,
+      maxAmount: data.maxAmount,
+      termUnit: data.termUnit as ProductFormValues["termUnit"],
+      minTermCount: String(data.minTermCount),
+      maxTermCount: String(data.maxTermCount),
+      ratePercent: String(data.ratePercent),
+      rateUnit: data.rateUnit as ProductFormValues["rateUnit"],
+      repaymentMethod: data.repaymentMethod,
+    });
+    setValidationError(null);
+    setEditing(true);
+  }
+
+  function submitEdit() {
+    if (!form) return;
+    const message = validateProductForm(form);
+    setValidationError(message);
+    if (!message) mutation.mutate();
+  }
 
   if (isLoading) return <Loading />;
   if (error) return <ErrorBanner error={error} />;
@@ -43,14 +78,8 @@ export function ProductDetailPage() {
         actions={
           can("PRODUCT_UPDATE") &&
           data.status === "ACTIVE" && (
-            <button
-              className="btn-secondary"
-              onClick={() => {
-                setRate(String(data.ratePercent));
-                setEditing(true);
-              }}
-            >
-              調整利率
+            <button className="btn-secondary" onClick={openEdit}>
+              編輯產品
             </button>
           )
         }
@@ -102,22 +131,24 @@ export function ProductDetailPage() {
         )}
       </div>
 
-      {editing && (
+      {editing && form && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6">
-            <h2 className="text-lg font-semibold">調整產品利率</h2>
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-6">
+            <h2 className="text-lg font-semibold">編輯產品</h2>
             <p className="mt-1 text-sm text-slate-500">
-              調整利率會建立新版本（v{data.version + 1}）並封存目前版本。既有放款的條件快照不受影響。
+              儲存會建立新版本（v{data.version + 1}）並封存目前版本。既有放款的條件快照不受影響。
             </p>
+
             <div className="mt-4">
-              <label className="label" htmlFor="prod-f1">新利率（%）</label>
-              <input id="prod-f1"
-                className="input tabular"
-                inputMode="decimal"
-                value={rate}
-                onChange={(e) => setRate(e.target.value)}
+              <ProductForm
+                values={form}
+                onChange={setForm}
+                codeEditable={false}
+                idPrefix="edit-product"
               />
             </div>
+
+            {validationError && <p className="mt-3 text-sm text-rose-600">{validationError}</p>}
             <ErrorBanner error={mutation.error} />
             <div className="mt-4 flex justify-end gap-2">
               <button className="btn-secondary" onClick={() => setEditing(false)}>
@@ -125,7 +156,7 @@ export function ProductDetailPage() {
               </button>
               <button
                 className="btn-primary"
-                onClick={() => mutation.mutate()}
+                onClick={submitEdit}
                 disabled={mutation.isPending}
               >
                 {mutation.isPending ? "建立中…" : "建立新版本"}

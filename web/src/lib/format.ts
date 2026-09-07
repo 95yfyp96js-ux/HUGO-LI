@@ -99,6 +99,8 @@ export const REPAYMENT_METHOD_LABELS: Record<string, string> = {
   CUSTOM: "自訂",
 };
 
+export const RATE_UNIT_LABEL: Record<string, string> = { DAILY: "日", MONTHLY: "月", ANNUAL: "年" };
+
 /** A day-term product is measured in 天; a month-term one in 期. */
 export function termSuffix(termUnit: string | null | undefined): string {
   return termUnit === "DAY" ? "天" : "期";

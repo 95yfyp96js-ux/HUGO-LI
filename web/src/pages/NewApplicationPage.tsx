@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { ErrorBanner, Loading, PageHeader } from "../components/ui";
+import { RATE_UNIT_LABEL, termNoun, termSuffix } from "../lib/format";
 
 interface Product {
   id: string;
@@ -18,15 +19,7 @@ interface Product {
   status: string;
 }
 
-const RATE_UNIT_LABEL: Record<string, string> = { DAILY: "日", MONTHLY: "月", ANNUAL: "年" };
 
-/** A day product asks for 天數; a month product asks for 期數. */
-function termNoun(termUnit: string) {
-  return termUnit === "DAY" ? "天數" : "期數";
-}
-function termSuffix(termUnit: string) {
-  return termUnit === "DAY" ? "天" : "期";
-}
 
 interface CustomerOption {
   id: string;

@@ -442,6 +442,17 @@ export function createRoutes(
     })
   );
 
+  // Read-only receivables list, filtered to one calendar day at a time. Every
+  // role that can read payments can see this — including AUDITOR, who can
+  // look but not register a payment against it.
+  router.get(
+    "/payments/due-today",
+    requirePermission("PAYMENT_READ"),
+    asyncHandler(async (req, res) => {
+      res.json(await container.payments.dueOn(req.query.date as string | undefined));
+    })
+  );
+
   router.post(
     "/payments/preview",
     requirePermission("PAYMENT_READ"),

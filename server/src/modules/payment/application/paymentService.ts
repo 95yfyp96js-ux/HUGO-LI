@@ -429,6 +429,77 @@ export class PaymentService {
     return reversed;
   }
 
+  /**
+   * Installments due on a given calendar day that are not yet fully
+   * collected — the receivables list a collector or officer works from.
+   *
+   * Filtered by ScheduleLine.dueDate, compared as a whole UTC day (the same
+   * convention OverdueEngine uses), not a range: picking a different day
+   * shows only that day's installments, never a running total since then.
+   * "狀態" (今天到期 / 已逾期) is judged against the real current date from the
+   * injected Clock, independent of which day is being viewed — a line for
+   * yesterday is 已逾期 whichever day you are looking at it from.
+   */
+  async dueOn(dateInput?: string) {
+    const reference = dateInput ? new Date(`${dateInput}T00:00:00.000Z`) : this.clock.now();
+    if (Number.isNaN(reference.getTime())) {
+      throw new ValidationError("date must be a valid calendar date (YYYY-MM-DD)", { date: dateInput });
+    }
+    const dayStart = Date.UTC(reference.getUTCFullYear(), reference.getUTCMonth(), reference.getUTCDate());
+    const dayEnd = dayStart + 24 * 60 * 60 * 1000;
+
+    const lines = await this.db.scheduleLine.findMany({
+      where: { dueDate: { gte: new Date(dayStart), lt: new Date(dayEnd) } },
+      orderBy: [{ dueDate: "asc" }, { installmentNumber: "asc" }],
+      include: {
+        loan: {
+          select: {
+            id: true,
+            loanNumber: true,
+            customer: { select: { id: true, name: true, customerNumber: true } },
+          },
+        },
+      },
+    });
+
+    const today = this.clock.now();
+    const todayStart = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+
+    const items = lines
+      .map((line) => {
+        const totalDue = Money.fromMinorUnits(line.totalDueCents);
+        const totalPaid = Money.fromMinorUnits(
+          line.principalPaidCents + line.interestPaidCents + line.feePaidCents
+        );
+        const remaining = totalDue.subtract(totalPaid);
+        return { line, totalDue, totalPaid, remaining };
+      })
+      // "尚未收滿": a line already fully paid is not a receivable, even if it
+      // fell due today.
+      .filter(({ remaining }) => remaining.isPositive())
+      .map(({ line, totalDue, totalPaid, remaining }) => ({
+        loanId: line.loan.id,
+        loanNumber: line.loan.loanNumber,
+        customerId: line.loan.customer.id,
+        customerName: line.loan.customer.name,
+        customerNumber: line.loan.customer.customerNumber,
+        installmentNumber: line.installmentNumber,
+        dueDate: line.dueDate,
+        totalDue: totalDue.toMajorUnitsString(),
+        totalPaid: totalPaid.toMajorUnitsString(),
+        remaining: remaining.toMajorUnitsString(),
+        status: Date.UTC(line.dueDate.getUTCFullYear(), line.dueDate.getUTCMonth(), line.dueDate.getUTCDate()) < todayStart
+          ? ("OVERDUE" as const)
+          : ("DUE_TODAY" as const),
+      }));
+
+    return {
+      date: new Date(dayStart).toISOString().slice(0, 10),
+      items,
+      totalRemaining: Money.sum(items.map((i) => Money.fromMajorUnits(i.remaining))).toMajorUnitsString(),
+    };
+  }
+
   async list(params: { loanId?: string; customerId?: string; take?: number; skip?: number }) {
     const where: Prisma.PaymentWhereInput = {};
     if (params.loanId) where.loanId = params.loanId;

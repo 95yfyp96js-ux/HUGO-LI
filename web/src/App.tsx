@@ -17,6 +17,7 @@ import { PendingDisbursementPage } from "./pages/PendingDisbursementPage";
 import { OverdueLoansPage } from "./pages/OverdueLoansPage";
 import { PaymentsPage } from "./pages/PaymentsPage";
 import { NewPaymentPage } from "./pages/NewPaymentPage";
+import { DueTodayPage } from "./pages/DueTodayPage";
 import { CollectionsPage } from "./pages/CollectionsPage";
 import { CollectionDetailPage } from "./pages/CollectionDetailPage";
 import { RenewalsPage } from "./pages/RenewalsPage";
@@ -71,6 +72,7 @@ export function App() {
 
         <Route path="/payments" element={<PaymentsPage />} />
         <Route path="/payments/new" element={<NewPaymentPage />} />
+        <Route path="/payments/due-today" element={<DueTodayPage />} />
 
         <Route path="/collections" element={<CollectionsPage />} />
         <Route path="/collections/:id" element={<CollectionDetailPage />} />
