@@ -1,0 +1,596 @@
+// Small Lending OS v1.0 — Prisma schema
+// Money fields are integer minor units (e.g. cents). See docs/database.md
+// and docs/decision-log.md for why (Prisma Decimal is unsupported on the
+// SQLite connector). Schema avoids SQLite-only features so a move to
+// PostgreSQL is a provider swap, not a redesign.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/pg-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// RBAC
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  displayName  String
+  passwordHash String
+  status       String   @default("ACTIVE") // ACTIVE | DISABLED
+  roles        UserRole[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  auditLogs        AuditLog[]
+  createdCustomers Customer[]       @relation("CustomerCreatedBy")
+  collectionCases  CollectionCase[] @relation("CollectionAssignee")
+}
+
+model Role {
+  id          String           @id @default(uuid())
+  code        String           @unique // ADMIN | MANAGER | LOAN_OFFICER | COLLECTOR | AUDITOR
+  name        String
+  permissions RolePermission[]
+  users       UserRole[]
+  createdAt   DateTime         @default(now())
+}
+
+model Permission {
+  id    String           @id @default(uuid())
+  code  String           @unique
+  roles RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id])
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User @relation(fields: [userId], references: [id])
+  role   Role @relation(fields: [roleId], references: [id])
+
+  @@id([userId, roleId])
+}
+
+// ---------------------------------------------------------------------------
+// Customer
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id                 String   @id @default(uuid())
+  customerNumber     String   @unique
+  name               String
+  identityNumber     String   @unique
+  dateOfBirth        DateTime
+  phone              String
+  email              String?
+  address            String?
+  employmentStatus   String?
+  employer           String?
+  monthlyIncomeCents Int?
+  status             String   @default("ACTIVE") // ACTIVE | INACTIVE | BLOCKED | ARCHIVED
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  createdById        String?
+  createdBy          User?    @relation("CustomerCreatedBy", fields: [createdById], references: [id])
+
+  notes           CustomerNote[]
+  applications    LendingApplication[]
+  loans           Loan[]
+  payments        Payment[]
+  moneyEvents     MoneyEvent[]
+  collectionCases CollectionCase[]
+  riskAssessments RiskAssessment[]
+  lendingLimits   LendingLimit[]
+
+  @@index([status])
+}
+
+model CustomerNote {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  note       String
+  createdAt  DateTime @default(now())
+  createdBy  String
+}
+
+// ---------------------------------------------------------------------------
+// Lending Application
+// ---------------------------------------------------------------------------
+
+model LendingApplication {
+  id                   String   @id @default(uuid())
+  applicationNumber    String   @unique
+  customerId           String
+  customer             Customer @relation(fields: [customerId], references: [id])
+  requestedProductId   String
+  requestedProduct     LoanProduct @relation(fields: [requestedProductId], references: [id])
+  requestedAmountCents Int
+  requestedTermMonths  Int
+  purpose              String?
+  incomeCents          Int?
+  existingDebtCents    Int?
+  status               String   @default("DRAFT") // DRAFT | SUBMITTED | UNDER_REVIEW | RISK_REVIEW | APPROVED | REJECTED | CANCELLED | EXPIRED
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  riskAssessments RiskAssessment[]
+  lendingLimits   LendingLimit[]
+  loanOffers      LoanOffer[]
+  approvals       LoanApproval[]
+  loan            Loan?
+
+  @@index([status])
+  @@index([customerId])
+}
+
+// ---------------------------------------------------------------------------
+// Risk
+// ---------------------------------------------------------------------------
+
+model RiskAssessment {
+  id            String              @id @default(uuid())
+  customerId    String
+  customer      Customer            @relation(fields: [customerId], references: [id])
+  applicationId String?
+  application   LendingApplication? @relation(fields: [applicationId], references: [id])
+  score         Int
+  grade         String // A | B | C | D | E
+  decision      String // AUTO_APPROVE | REVIEW_REQUIRED | HIGH_RISK | REJECT
+  reasons       String // JSON-encoded string[]
+  modelVersion  String
+  createdAt     DateTime @default(now())
+
+  factors RiskFactor[]
+
+  @@index([customerId])
+  @@index([applicationId])
+}
+
+model RiskFactor {
+  id               String         @id @default(uuid())
+  riskAssessmentId String
+  riskAssessment   RiskAssessment @relation(fields: [riskAssessmentId], references: [id])
+  code             String
+  label            String
+  value            String
+  points           Int
+}
+
+// ---------------------------------------------------------------------------
+// Lending Limit
+// ---------------------------------------------------------------------------
+
+model LendingLimit {
+  id                   String   @id @default(uuid())
+  customerId           String
+  customer             Customer @relation(fields: [customerId], references: [id])
+  applicationId        String?
+  application          LendingApplication? @relation(fields: [applicationId], references: [id])
+  maximumLimitCents    Int
+  currentExposureCents Int
+  availableLimitCents  Int
+  requestedAmountCents Int
+  recommendedAmountCents Int
+  decision             String // LIMIT_AVAILABLE | LIMIT_EXCEEDED
+  reasons              String @default("[]")
+  engineVersion        String
+  createdAt            DateTime @default(now())
+
+  @@index([customerId])
+}
+
+// ---------------------------------------------------------------------------
+// Product / Pricing
+// ---------------------------------------------------------------------------
+
+model LoanProduct {
+  id                String   @id @default(uuid())
+  productCode       String
+  name              String
+  description       String?
+  minAmountCents    Int
+  maxAmountCents    Int
+  minTermMonths     Int
+  maxTermMonths     Int
+  ratePercent       Float // percent per rateUnit, e.g. 2.5 = 2.5%
+  rateUnit          String // DAILY | MONTHLY | ANNUAL
+  calculationMethod String // SIMPLE_INTEREST | AMORTIZED | COMPOUND | CUSTOM
+  repaymentMethod   String // INTEREST_ONLY | PRINCIPAL_AND_INTEREST | PRINCIPAL_ONLY | BULLET | CUSTOM
+  // How interest is treated when a loan settles early. Part of the priced
+  // terms, so changing it versions the product (see docs/business-rules).
+  settlementPolicy  String   @default("FULL_CONTRACT_INTEREST") // FULL_CONTRACT_INTEREST | UNACCRUED_INTEREST_REBATE
+  status            String   @default("ACTIVE") // ACTIVE | INACTIVE | ARCHIVED
+  version           Int      @default(1)
+  feeRules          String   @default("[]") // JSON-encoded FeeRule[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  applications LendingApplication[]
+  loanOffers   LoanOffer[]
+
+  @@unique([productCode, version])
+}
+
+model LoanOffer {
+  id                 String             @id @default(uuid())
+  applicationId      String
+  application        LendingApplication @relation(fields: [applicationId], references: [id])
+  productId          String
+  product            LoanProduct        @relation(fields: [productId], references: [id])
+  approvedAmountCents Int
+  ratePercent        Float
+  rateUnit           String
+  calculationMethod  String
+  termMonths         Int
+  feesCents          Int
+  repaymentMethod    String
+  settlementPolicy   String   @default("FULL_CONTRACT_INTEREST")
+  totalInterestCents Int
+  totalPayableCents  Int
+  pricingVersion     String
+  createdAt          DateTime @default(now())
+
+  approvals LoanApproval[]
+}
+
+// ---------------------------------------------------------------------------
+// Approval
+// ---------------------------------------------------------------------------
+
+model LoanApproval {
+  id                 String             @id @default(uuid())
+  applicationId      String
+  application        LendingApplication @relation(fields: [applicationId], references: [id])
+  loanOfferId        String?
+  loanOffer          LoanOffer?         @relation(fields: [loanOfferId], references: [id])
+  decision           String // PENDING | APPROVED | REJECTED | CONDITIONAL
+  approvedAmountCents Int?
+  approvedTermMonths Int?
+  approvedRatePercent Float?
+  conditions         String  @default("[]") // JSON-encoded ApprovalCondition[]
+  reason             String?
+  approvedBy         String?
+  approvedAt         DateTime?
+  createdAt          DateTime @default(now())
+
+  @@index([applicationId])
+}
+
+// ---------------------------------------------------------------------------
+// Loan
+// ---------------------------------------------------------------------------
+
+model Loan {
+  id                        String   @id @default(uuid())
+  loanNumber                String   @unique
+  customerId                String
+  customer                  Customer @relation(fields: [customerId], references: [id])
+  applicationId             String   @unique
+  application               LendingApplication @relation(fields: [applicationId], references: [id])
+  productId                 String
+  principalCents            Int
+  outstandingPrincipalCents Int
+  outstandingInterestCents  Int
+  outstandingFeeCents       Int      @default(0)
+  status                    String   @default("CREATED")
+  startDate                 DateTime?
+  maturityDate              DateTime?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  snapshot        LoanSnapshot?
+  disbursements   Disbursement[]
+  scheduleLines   ScheduleLine[]
+  payments        Payment[]
+  moneyEvents     MoneyEvent[]
+  interestAccruals InterestAccrual[]
+  collectionCases CollectionCase[]
+  extensions      Extension[]
+  settlement      Settlement?
+
+  renewalsAsOriginal Renewal[] @relation("RenewalOriginal")
+  renewalsAsPrevious Renewal[] @relation("RenewalPrevious")
+  renewalAsNew       Renewal?  @relation("RenewalNew")
+
+  @@index([status])
+  @@index([customerId])
+}
+
+// Immutable once written. If terms must change, write a LoanAdjustment row —
+// never UPDATE the pricing/product columns here.
+model LoanSnapshot {
+  id                    String   @id @default(uuid())
+  loanId                String   @unique
+  loan                  Loan     @relation(fields: [loanId], references: [id])
+  principalCents        Int
+  ratePercent           Float
+  rateUnit              String
+  calculationMethod     String
+  termMonths            Int
+  repaymentMethod       String
+  settlementPolicy      String   @default("FULL_CONTRACT_INTEREST")
+  productId             String
+  productVersion        Int
+  feeRules              String
+  pricingVersion        String
+  riskAssessmentVersion String
+  approvalVersion       String
+  createdAt             DateTime @default(now())
+
+  adjustments LoanAdjustment[]
+}
+
+model LoanAdjustment {
+  id         String       @id @default(uuid())
+  snapshotId String
+  snapshot   LoanSnapshot @relation(fields: [snapshotId], references: [id])
+  reason     String
+  changes    String // JSON-encoded diff
+  createdAt  DateTime @default(now())
+  createdBy  String
+}
+
+model Disbursement {
+  id                 String    @id @default(uuid())
+  disbursementNumber String    @unique
+  loanId             String
+  loan               Loan      @relation(fields: [loanId], references: [id])
+  amountCents        Int
+  method             String
+  reference          String?
+  status             String    @default("PENDING") // PENDING | PROCESSING | COMPLETED | FAILED | CANCELLED
+  idempotencyKey     String    @unique
+  processedAt        DateTime?
+  processedBy        String?
+  createdAt          DateTime  @default(now())
+}
+
+model ScheduleLine {
+  id                 String   @id @default(uuid())
+  loanId             String
+  loan               Loan     @relation(fields: [loanId], references: [id])
+  installmentNumber  Int
+  dueDate            DateTime
+  principalDueCents  Int
+  interestDueCents   Int
+  feeDueCents        Int      @default(0)
+  totalDueCents      Int
+  principalPaidCents Int      @default(0)
+  interestPaidCents  Int      @default(0)
+  feePaidCents       Int      @default(0)
+  status             String   @default("PENDING") // PENDING | PARTIALLY_PAID | PAID | OVERDUE
+
+  @@unique([loanId, installmentNumber])
+  @@index([loanId, dueDate])
+}
+
+model InterestAccrual {
+  id          String   @id @default(uuid())
+  loanId      String
+  loan        Loan     @relation(fields: [loanId], references: [id])
+  periodStart DateTime
+  periodEnd   DateTime
+  days        Int
+  amountCents Int
+  createdAt   DateTime @default(now())
+
+  @@index([loanId])
+}
+
+// ---------------------------------------------------------------------------
+// Payments
+// ---------------------------------------------------------------------------
+
+model Payment {
+  id             String   @id @default(uuid())
+  paymentNumber  String   @unique
+  loanId         String
+  loan           Loan     @relation(fields: [loanId], references: [id])
+  customerId     String
+  customer       Customer @relation(fields: [customerId], references: [id])
+  amountCents    Int
+  method         String
+  status         String   @default("CONFIRMED") // PENDING | CONFIRMED | FAILED | REVERSED
+  idempotencyKey String   @unique
+  paidAt         DateTime
+  createdBy      String
+  createdAt      DateTime @default(now())
+
+  allocations PaymentAllocation[]
+
+  @@index([loanId])
+}
+
+model PaymentAllocation {
+  id                   String  @id @default(uuid())
+  paymentId            String
+  payment              Payment @relation(fields: [paymentId], references: [id])
+  principalAmountCents Int
+  interestAmountCents  Int
+  feeAmountCents       Int
+}
+
+// Append-only financial ledger. Never DELETE or mutate; a reversal is a new
+// PAYMENT_REVERSAL row.
+model MoneyEvent {
+  id          String   @id @default(uuid())
+  loanId      String
+  loan        Loan     @relation(fields: [loanId], references: [id])
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id])
+  type        String // DISBURSEMENT | INTEREST_ACCRUAL | FEE_CHARGE | PAYMENT | PAYMENT_REVERSAL | ADJUSTMENT | WRITE_OFF | SETTLEMENT
+  amountCents Int
+  referenceId String?
+  occurredAt  DateTime
+  createdBy   String
+  metadata    String   @default("{}")
+  createdAt   DateTime @default(now())
+
+  @@index([loanId])
+  @@index([type])
+}
+
+// ---------------------------------------------------------------------------
+// Collections
+// ---------------------------------------------------------------------------
+
+model CollectionCase {
+  id                     String    @id @default(uuid())
+  caseNumber             String    @unique
+  loanId                 String
+  loan                   Loan      @relation(fields: [loanId], references: [id])
+  customerId             String
+  customer               Customer  @relation(fields: [customerId], references: [id])
+  daysOverdue            Int
+  outstandingAmountCents Int
+  priority               String // LOW | MEDIUM | HIGH | CRITICAL
+  status                 String    @default("OPEN") // OPEN | IN_PROGRESS | PROMISE_TO_PAY | ESCALATED | PAID | CLOSED
+  assignedUserId         String?
+  assignedUser           User?     @relation("CollectionAssignee", fields: [assignedUserId], references: [id])
+  nextActionAt           DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  activities CollectionActivity[]
+  promises   PromiseToPay[]
+
+  @@index([status])
+  @@index([loanId])
+}
+
+model CollectionActivity {
+  id               String         @id @default(uuid())
+  collectionCaseId String
+  collectionCase   CollectionCase @relation(fields: [collectionCaseId], references: [id])
+  type             String // PHONE | SMS | EMAIL | IN_PERSON | SYSTEM | OTHER
+  result           String?
+  note             String?
+  createdBy        String
+  createdAt        DateTime  @default(now())
+  nextActionAt     DateTime?
+}
+
+model PromiseToPay {
+  id                  String         @id @default(uuid())
+  collectionCaseId    String
+  collectionCase      CollectionCase @relation(fields: [collectionCaseId], references: [id])
+  promisedAmountCents Int
+  promisedDate        DateTime
+  status              String         @default("PENDING") // PENDING | KEPT | BROKEN
+  createdBy           String
+  createdAt           DateTime       @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Renewal / Extension / Settlement
+// ---------------------------------------------------------------------------
+
+model Renewal {
+  id             String   @id @default(uuid())
+  originalLoanId String
+  originalLoan   Loan     @relation("RenewalOriginal", fields: [originalLoanId], references: [id])
+  previousLoanId String
+  previousLoan   Loan     @relation("RenewalPrevious", fields: [previousLoanId], references: [id])
+  newLoanId      String   @unique
+  newLoan        Loan     @relation("RenewalNew", fields: [newLoanId], references: [id])
+  reason         String
+  createdAt      DateTime @default(now())
+  createdBy      String
+
+  @@index([originalLoanId])
+}
+
+model Extension {
+  id                  String   @id @default(uuid())
+  loanId              String
+  loan                Loan     @relation(fields: [loanId], references: [id])
+  previousMaturityDate DateTime
+  newMaturityDate     DateTime
+  extensionMonths     Int
+  feeCents            Int      @default(0)
+  reason              String
+  createdAt           DateTime @default(now())
+  createdBy           String
+
+  @@index([loanId])
+}
+
+model Settlement {
+  id                 String   @id @default(uuid())
+  loanId             String   @unique
+  loan               Loan     @relation(fields: [loanId], references: [id])
+  principalPaidCents Int
+  interestPaidCents  Int
+  feesPaidCents      Int
+  totalPaidCents     Int
+  settledAt          DateTime
+  settledBy          String
+  createdAt          DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Documents
+// ---------------------------------------------------------------------------
+
+model Document {
+  id         String   @id @default(uuid())
+  ownerType  String // CUSTOMER | LOAN | APPLICATION
+  ownerId    String
+  fileName   String
+  mimeType   String
+  sizeBytes  Int
+  storageRef String
+  createdAt  DateTime @default(now())
+  createdBy  String
+
+  @@index([ownerType, ownerId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String
+  resource   String
+  resourceId String
+  before     String?
+  after      String?
+  reason     String?
+  timestamp  DateTime @default(now())
+  ip         String?
+  metadata   String   @default("{}")
+
+  @@index([resource, resourceId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Idempotency
+// ---------------------------------------------------------------------------
+
+model IdempotencyRecord {
+  key          String   @id
+  endpoint     String
+  responseBody String
+  createdAt    DateTime @default(now())
+}
