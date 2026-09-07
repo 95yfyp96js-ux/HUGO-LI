@@ -119,6 +119,22 @@ export class RenewalNotPermittedError extends DomainError {
   }
 }
 
+/**
+ * Raised when a loan's agreed settlement policy has no implemented write
+ * path. Refusing is deliberate: silently settling at full contract interest
+ * would overcharge a borrower whose contract promises a rebate.
+ */
+export class SettlementPolicyNotImplementedError extends DomainError {
+  constructor(policy: string, loanId: string) {
+    super(
+      "SETTLEMENT_POLICY_NOT_IMPLEMENTED",
+      `Settlement policy ${policy} cannot be settled automatically yet; settle this loan manually rather than charging full contract interest`,
+      422,
+      { policy, loanId }
+    );
+  }
+}
+
 export class ValidationError extends DomainError {
   constructor(message: string, details: Record<string, unknown> = {}) {
     super("VALIDATION_ERROR", message, 400, details);

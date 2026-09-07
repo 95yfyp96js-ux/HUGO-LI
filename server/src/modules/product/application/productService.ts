@@ -3,6 +3,11 @@ import { Money } from "../../../shared/money.js";
 import { ProductNotFoundError, ValidationError } from "../../../shared/errors.js";
 import type { AuditContext, AuditService } from "../../audit/application/auditService.js";
 import type { FeeRule } from "../../pricing/domain/pricingEngine.js";
+import {
+  DEFAULT_SETTLEMENT_POLICY,
+  isSettlementPolicy,
+  type SettlementPolicy,
+} from "../../repayment/domain/settlementPolicy.js";
 
 export interface CreateProductInput {
   productCode: string;
@@ -16,6 +21,7 @@ export interface CreateProductInput {
   rateUnit: "DAILY" | "MONTHLY" | "ANNUAL";
   calculationMethod: "SIMPLE_INTEREST" | "AMORTIZED" | "COMPOUND" | "CUSTOM";
   repaymentMethod: "INTEREST_ONLY" | "PRINCIPAL_AND_INTEREST" | "PRINCIPAL_ONLY" | "BULLET" | "CUSTOM";
+  settlementPolicy?: SettlementPolicy;
   feeRules?: FeeRule[];
 }
 
@@ -28,6 +34,9 @@ const PRICING_FIELDS = [
   "calculationMethod",
   "repaymentMethod",
   "feeRules",
+  // What early settlement costs is a priced term, so changing it must create
+  // a new version rather than silently rewriting live contracts.
+  "settlementPolicy",
 ] as const;
 
 export class ProductService {
@@ -46,6 +55,9 @@ export class ProductService {
       throw new ValidationError("maxTermMonths must be greater than or equal to minTermMonths");
     }
     if (input.ratePercent < 0) throw new ValidationError("ratePercent cannot be negative");
+    if (input.settlementPolicy && !isSettlementPolicy(input.settlementPolicy)) {
+      throw new ValidationError("Unknown settlementPolicy", { settlementPolicy: input.settlementPolicy });
+    }
 
     const product = await this.db.loanProduct.create({
       data: {
@@ -60,6 +72,7 @@ export class ProductService {
         rateUnit: input.rateUnit,
         calculationMethod: input.calculationMethod,
         repaymentMethod: input.repaymentMethod,
+        settlementPolicy: input.settlementPolicy ?? DEFAULT_SETTLEMENT_POLICY,
         feeRules: JSON.stringify(input.feeRules ?? []),
         version: 1,
         status: "ACTIVE",
@@ -144,6 +157,7 @@ export class ProductService {
           rateUnit: input.rateUnit ?? existing.rateUnit,
           calculationMethod: input.calculationMethod ?? existing.calculationMethod,
           repaymentMethod: input.repaymentMethod ?? existing.repaymentMethod,
+          settlementPolicy: input.settlementPolicy ?? existing.settlementPolicy,
           feeRules: input.feeRules ? JSON.stringify(input.feeRules) : existing.feeRules,
           version: existing.version + 1,
           status: "ACTIVE",

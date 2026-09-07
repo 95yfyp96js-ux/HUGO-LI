@@ -327,12 +327,23 @@ export function createRoutes(container: Container): Router {
     })
   );
 
+  router.get(
+    "/loans/:id/settlement-quote",
+    requirePermission("LOAN_READ"),
+    asyncHandler(async (req, res) => {
+      res.json(await container.payments.settlementQuote(req.params.id!));
+    })
+  );
+
   // Settlement here is an explicit final payment for the whole balance.
   router.post(
     "/loans/:id/settle",
     requirePermission("LOAN_SETTLE"),
     asyncHandler(async (req, res) => {
       const idempotencyKey = requireIdempotencyKey(req);
+      // Refuses rather than charging full contract interest on a loan whose
+      // agreed policy promises a rebate.
+      await container.payments.assertSettleable(req.params.id!);
       const outstanding = await container.payments.getOutstanding(req.params.id!);
       const total = outstanding.principal.add(outstanding.interest).add(outstanding.fees);
       if (total.isZero()) throw new ValidationError("Loan has no outstanding balance to settle");

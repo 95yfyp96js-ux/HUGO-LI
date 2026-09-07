@@ -210,6 +210,7 @@ export class RenewalService {
           calculationMethod: offer.calculationMethod,
           termMonths,
           repaymentMethod: offer.repaymentMethod,
+          settlementPolicy: offer.settlementPolicy,
           productId: product.id,
           productVersion: product.version,
           feeRules: product.feeRules,

@@ -6,6 +6,7 @@ import { PricingEngine, type FeeRule } from "../domain/pricingEngine.js";
 import type { RiskGrade } from "../../risk/domain/riskEngine.js";
 import type { CalculationMethod, RateUnit } from "../../repayment/domain/interestEngine.js";
 import type { RepaymentMethod } from "../../repayment/domain/repaymentEngine.js";
+import type { SettlementPolicy } from "../../repayment/domain/settlementPolicy.js";
 
 export interface CreateOfferInput {
   applicationId: string;
@@ -49,6 +50,7 @@ export class PricingService {
         minTermMonths: product.minTermMonths,
         maxTermMonths: product.maxTermMonths,
         feeRules: JSON.parse(product.feeRules) as FeeRule[],
+        settlementPolicy: product.settlementPolicy as SettlementPolicy,
       },
     });
 
@@ -63,6 +65,7 @@ export class PricingService {
         termMonths: priced.termMonths,
         feesCents: priced.totalFees.toMinorUnits(),
         repaymentMethod: priced.repaymentMethod,
+        settlementPolicy: priced.settlementPolicy,
         totalInterestCents: priced.totalInterest.toMinorUnits(),
         totalPayableCents: priced.totalPayable.toMinorUnits(),
         pricingVersion: priced.pricingVersion,

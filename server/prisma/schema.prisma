@@ -211,6 +211,9 @@ model LoanProduct {
   rateUnit          String // DAILY | MONTHLY | ANNUAL
   calculationMethod String // SIMPLE_INTEREST | AMORTIZED | COMPOUND | CUSTOM
   repaymentMethod   String // INTEREST_ONLY | PRINCIPAL_AND_INTEREST | PRINCIPAL_ONLY | BULLET | CUSTOM
+  // How interest is treated when a loan settles early. Part of the priced
+  // terms, so changing it versions the product (see docs/business-rules).
+  settlementPolicy  String   @default("FULL_CONTRACT_INTEREST") // FULL_CONTRACT_INTEREST | UNACCRUED_INTEREST_REBATE
   status            String   @default("ACTIVE") // ACTIVE | INACTIVE | ARCHIVED
   version           Int      @default(1)
   feeRules          String   @default("[]") // JSON-encoded FeeRule[]
@@ -236,6 +239,7 @@ model LoanOffer {
   termMonths         Int
   feesCents          Int
   repaymentMethod    String
+  settlementPolicy   String   @default("FULL_CONTRACT_INTEREST")
   totalInterestCents Int
   totalPayableCents  Int
   pricingVersion     String
@@ -319,6 +323,7 @@ model LoanSnapshot {
   calculationMethod     String
   termMonths            Int
   repaymentMethod       String
+  settlementPolicy      String   @default("FULL_CONTRACT_INTEREST")
   productId             String
   productVersion        Int
   feeRules              String

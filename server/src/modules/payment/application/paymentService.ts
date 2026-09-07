@@ -13,6 +13,11 @@ import { AllocationEngine } from "../domain/allocationEngine.js";
 import { LoanStateMachine, type LoanStatus } from "../../loan/domain/loanStateMachine.js";
 import { OverdueEngine } from "../../loan/domain/overdueEngine.js";
 import { CollectionEngine } from "../../collection/domain/collectionEngine.js";
+import {
+  SettlementPolicyEngine,
+  type SettlementPolicy,
+} from "../../repayment/domain/settlementPolicy.js";
+import { SettlementPolicyNotImplementedError } from "../../../shared/errors.js";
 
 const SERVICING = ["ACTIVE", "DUE_SOON", "DUE", "OVERDUE", "DEFAULTED"];
 
@@ -40,6 +45,62 @@ export class PaymentService {
       fees: Money.fromMinorUnits(loan.outstandingFeeCents),
       principal: Money.fromMinorUnits(loan.outstandingPrincipalCents),
     };
+  }
+
+  /**
+   * What it costs to close this loan today, under the settlement policy
+   * frozen onto its snapshot.
+   *
+   * The policy is read from the loan's own snapshot, never from the current
+   * product, so repricing a product cannot change an existing borrower's
+   * payoff terms.
+   */
+  async settlementQuote(loanId: string) {
+    const loan = await this.db.loan.findUnique({
+      where: { id: loanId },
+      include: { snapshot: true, scheduleLines: { orderBy: { installmentNumber: "asc" } } },
+    });
+    if (!loan) throw new LoanNotFoundError(loanId);
+
+    const policy = (loan.snapshot?.settlementPolicy ?? "FULL_CONTRACT_INTEREST") as SettlementPolicy;
+
+    const quote = SettlementPolicyEngine.quote({
+      policy,
+      settlementDate: this.clock.now(),
+      outstandingPrincipal: Money.fromMinorUnits(loan.outstandingPrincipalCents),
+      outstandingInterest: Money.fromMinorUnits(loan.outstandingInterestCents),
+      outstandingFees: Money.fromMinorUnits(loan.outstandingFeeCents),
+      scheduleLines: loan.scheduleLines.map((line) => ({
+        installmentNumber: line.installmentNumber,
+        dueDate: line.dueDate,
+        interestDue: Money.fromMinorUnits(line.interestDueCents),
+      })),
+    });
+
+    return {
+      loanId,
+      policy,
+      earnedInterest: quote.earnedInterest.toMajorUnitsString(),
+      unearnedInterest: quote.unearnedInterest.toMajorUnitsString(),
+      rebate: quote.rebate.toMajorUnitsString(),
+      interestPayable: quote.interestPayable.toMajorUnitsString(),
+      payoffAmount: quote.payoffAmount.toMajorUnitsString(),
+      /**
+       * v1 recognises the whole term's interest at disbursement, so waiving
+       * the unearned portion needs a ledger change that is out of scope for
+       * this sprint. Rebate loans therefore quote correctly but cannot be
+       * settled through the API yet.
+       */
+      settleable: quote.rebate.isZero(),
+    };
+  }
+
+  /** Guards the settle path against silently overcharging a rebate borrower. */
+  async assertSettleable(loanId: string): Promise<void> {
+    const quote = await this.settlementQuote(loanId);
+    if (!quote.settleable) {
+      throw new SettlementPolicyNotImplementedError(quote.policy, loanId);
+    }
   }
 
   /** Preview of how a payment would be split — used by the collection UI before confirming. */

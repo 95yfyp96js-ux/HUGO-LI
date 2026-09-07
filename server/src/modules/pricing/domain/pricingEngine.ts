@@ -4,6 +4,7 @@ import type { CalculationMethod, RateUnit } from "../../repayment/domain/interes
 import type { RepaymentMethod } from "../../repayment/domain/repaymentEngine.js";
 import { RepaymentEngine } from "../../repayment/domain/repaymentEngine.js";
 import { PricingUnavailableError } from "../../../shared/errors.js";
+import type { SettlementPolicy } from "../../repayment/domain/settlementPolicy.js";
 
 export const PRICING_VERSION = "pricing-rules-v1";
 
@@ -30,6 +31,7 @@ export interface PricingInput {
     minTermMonths: number;
     maxTermMonths: number;
     feeRules: FeeRule[];
+    settlementPolicy: SettlementPolicy;
   };
   /** Optional collateral value; reduces the risk premium when present. */
   collateralValue?: Money | null;
@@ -58,6 +60,7 @@ export interface LoanOfferResult {
   calculationMethod: CalculationMethod;
   termMonths: number;
   repaymentMethod: RepaymentMethod;
+  settlementPolicy: SettlementPolicy;
   fees: PricedFee[];
   totalFees: Money;
   totalInterest: Money;
@@ -140,6 +143,7 @@ export const PricingEngine = {
       calculationMethod: input.product.calculationMethod,
       termMonths: input.termMonths,
       repaymentMethod: input.product.repaymentMethod,
+      settlementPolicy: input.product.settlementPolicy,
       fees,
       totalFees,
       totalInterest: schedule.totalInterest,

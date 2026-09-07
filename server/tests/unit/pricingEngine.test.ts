@@ -15,6 +15,7 @@ const product: PricingInput["product"] = {
   minTermMonths: 1,
   maxTermMonths: 24,
   feeRules: [],
+  settlementPolicy: "FULL_CONTRACT_INTEREST",
 };
 
 const base: PricingInput = {

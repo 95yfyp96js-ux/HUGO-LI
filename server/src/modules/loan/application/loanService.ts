@@ -108,6 +108,9 @@ export class LoanService {
           calculationMethod: offer.calculationMethod,
           termMonths,
           repaymentMethod: offer.repaymentMethod,
+          // Frozen with the rest of the terms: repricing the product later
+          // cannot change what settling this loan early costs.
+          settlementPolicy: offer.settlementPolicy,
           productId: application.requestedProductId,
           productVersion: application.requestedProduct.version,
           feeRules: application.requestedProduct.feeRules,
