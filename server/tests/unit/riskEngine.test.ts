@@ -4,7 +4,7 @@ import { Money } from "../../src/shared/money.js";
 
 const cleanCustomer: RiskEngineInput = {
   requestedAmount: Money.fromMajorUnits(50000),
-  requestedTermMonths: 6,
+  requestedTermCount: 6,
   monthlyIncome: Money.fromMajorUnits(60000),
   existingDebt: Money.zero(),
   currentExposure: Money.zero(),
@@ -41,7 +41,7 @@ describe("RiskEngine", () => {
       ...cleanCustomer,
       monthlyIncome: Money.fromMajorUnits(20000),
       existingDebt: Money.fromMajorUnits(200000),
-      requestedTermMonths: 3,
+      requestedTermCount: 3,
     });
     const dti = result.factors.find((f) => f.code === "DEBT_TO_INCOME");
     expect(dti?.points).toBeGreaterThanOrEqual(30);

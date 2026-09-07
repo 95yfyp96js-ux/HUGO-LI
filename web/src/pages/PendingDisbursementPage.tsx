@@ -13,7 +13,7 @@ interface LoanDetail {
   principalCents: number;
   maturityDate: string | null;
   customer: { name: string; customerNumber: string };
-  snapshot: { ratePercent: number; rateUnit: string; termMonths: number; repaymentMethod: string } | null;
+  snapshot: { ratePercent: number; rateUnit: string; termCount: number; repaymentMethod: string } | null;
   scheduleLines: Array<{ installmentNumber: number; dueDate: string; totalDueCents: number }>;
 }
 
@@ -66,7 +66,7 @@ export function PendingDisbursementPage() {
               className: "text-right",
             },
             { header: "利率", cell: (row) => percent(row.snapshot?.ratePercent, row.snapshot?.rateUnit) },
-            { header: "期數", cell: (row) => (row.snapshot ? `${row.snapshot.termMonths} 期` : "—") },
+            { header: "期數", cell: (row) => (row.snapshot ? `${row.snapshot.termCount} 期` : "—") },
             { header: "到期日", cell: (row) => date(row.maturityDate) },
             {
               header: "操作",
@@ -147,7 +147,7 @@ function DisbursementDialog({
                 label="放款利率"
                 value={percent(loan.snapshot?.ratePercent, loan.snapshot?.rateUnit)}
               />
-              <Row label="期數" value={`${loan.snapshot?.termMonths ?? "—"} 期`} />
+              <Row label="期數" value={`${loan.snapshot?.termCount ?? "—"} 期`} />
               <Row
                 label="還款方式"
                 value={REPAYMENT_METHOD_LABELS[loan.snapshot?.repaymentMethod ?? ""] ?? "—"}

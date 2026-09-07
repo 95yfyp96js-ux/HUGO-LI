@@ -10,8 +10,8 @@ interface Product {
   productCode: string;
   minAmount: string;
   maxAmount: string;
-  minTermMonths: number;
-  maxTermMonths: number;
+  minTermCount: number;
+  maxTermCount: number;
   ratePercent: number;
   rateUnit: string;
   status: string;
@@ -32,7 +32,7 @@ export function NewApplicationPage() {
   const [form, setForm] = useState({
     requestedProductId: "",
     requestedAmount: "",
-    requestedTermMonths: "3",
+    requestedTermCount: "3",
     purpose: "",
     income: "",
     existingDebt: "",
@@ -58,7 +58,7 @@ export function NewApplicationPage() {
           customerId,
           requestedProductId: form.requestedProductId,
           requestedAmount: form.requestedAmount,
-          requestedTermMonths: Number(form.requestedTermMonths),
+          requestedTermCount: Number(form.requestedTermCount),
           purpose: form.purpose || null,
           income: form.income || null,
           existingDebt: form.existingDebt || null,
@@ -141,7 +141,7 @@ export function NewApplicationPage() {
           {selectedProduct && (
             <p className="mt-1 text-xs text-slate-500">
               金額 {selectedProduct.minAmount} ~ {selectedProduct.maxAmount}，期數{" "}
-              {selectedProduct.minTermMonths} ~ {selectedProduct.maxTermMonths} 期
+              {selectedProduct.minTermCount} ~ {selectedProduct.maxTermCount} 期
             </p>
           )}
         </div>
@@ -162,8 +162,8 @@ export function NewApplicationPage() {
             <input id="newa-f4"
               className="input tabular"
               inputMode="numeric"
-              value={form.requestedTermMonths}
-              onChange={(e) => setForm((f) => ({ ...f, requestedTermMonths: e.target.value }))}
+              value={form.requestedTermCount}
+              onChange={(e) => setForm((f) => ({ ...f, requestedTermCount: e.target.value }))}
               required
             />
           </div>

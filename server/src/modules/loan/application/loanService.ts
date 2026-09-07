@@ -10,7 +10,8 @@ import { formatSequenceNumber } from "../../../shared/ids.js";
 import type { Clock } from "../../../shared/clock.js";
 import type { AuditContext, AuditService } from "../../audit/application/auditService.js";
 import { LoanStateMachine, type LoanStatus } from "../domain/loanStateMachine.js";
-import { RepaymentEngine, type RepaymentMethod } from "../../repayment/domain/repaymentEngine.js";
+import { RepaymentEngine, type RepaymentMethod, type TermUnit } from "../../repayment/domain/repaymentEngine.js";
+import type { RateUnit } from "../../repayment/domain/interestEngine.js";
 import { BalanceEngine, type LedgerEntry } from "../domain/balanceEngine.js";
 import { OverdueEngine } from "../domain/overdueEngine.js";
 import type { DisbursementProvider } from "../../disbursement/domain/disbursementProvider.js";
@@ -64,14 +65,19 @@ export class LoanService {
     }
 
     const principal = Money.fromMinorUnits(approval.approvedAmountCents ?? offer.approvedAmountCents);
-    const termMonths = approval.approvedTermMonths ?? offer.termMonths;
+    const termCount = approval.approvedTermCount ?? offer.termCount;
     const ratePercent = approval.approvedRatePercent ?? offer.ratePercent;
     const startDate = this.clock.now();
 
+    // The offer's unit, not the product's current one: repricing the product
+    // between offer and drawdown must not change what was agreed.
+    const termUnit = offer.termUnit as TermUnit;
     const schedule = RepaymentEngine.generateSchedule({
       principal,
       ratePercent,
-      termMonths,
+      rateUnit: offer.rateUnit as RateUnit,
+      termCount,
+      termUnit,
       startDate,
       repaymentMethod: offer.repaymentMethod as RepaymentMethod,
     });
@@ -106,7 +112,8 @@ export class LoanService {
           ratePercent,
           rateUnit: offer.rateUnit,
           calculationMethod: offer.calculationMethod,
-          termMonths,
+          termCount,
+          termUnit,
           repaymentMethod: offer.repaymentMethod,
           // Frozen with the rest of the terms: repricing the product later
           // cannot change what settling this loan early costs.
@@ -150,7 +157,7 @@ export class LoanService {
             loanNumber: created.loanNumber,
             principal: principal.toMajorUnitsString(),
             ratePercent,
-            termMonths,
+            termCount,
             repaymentMethod: offer.repaymentMethod,
             maturityDate,
           },
@@ -511,7 +518,7 @@ export class LoanService {
         skip: params.skip ?? 0,
         include: {
           customer: { select: { id: true, name: true, customerNumber: true } },
-          snapshot: { select: { ratePercent: true, rateUnit: true, termMonths: true } },
+          snapshot: { select: { ratePercent: true, rateUnit: true, termCount: true } },
           scheduleLines: { select: { dueDate: true, totalDueCents: true, principalPaidCents: true, interestPaidCents: true, feePaidCents: true, installmentNumber: true } },
           application: { include: { riskAssessments: { orderBy: { createdAt: "desc" }, take: 1 } } },
         },

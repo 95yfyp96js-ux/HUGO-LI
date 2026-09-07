@@ -38,7 +38,7 @@ interface Customer360 {
     applicationNumber: string;
     status: string;
     requestedAmount: string;
-    requestedTermMonths: number;
+    requestedTermCount: number;
     productName: string;
     createdAt: string;
   }>;
@@ -264,7 +264,7 @@ export function CustomerDetailPage() {
             },
             { header: "產品", cell: (row) => row.productName },
             { header: "申請金額", cell: (row) => <Money value={row.requestedAmount} />, className: "text-right" },
-            { header: "期數", cell: (row) => `${row.requestedTermMonths} 期` },
+            { header: "期數", cell: (row) => `${row.requestedTermCount} 期` },
             { header: "狀態", cell: (row) => <StatusBadge status={row.status} kind="application" /> },
             { header: "申請日", cell: (row) => date(row.createdAt) },
           ]}

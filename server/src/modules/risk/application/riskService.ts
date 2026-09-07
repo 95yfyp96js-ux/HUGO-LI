@@ -151,7 +151,7 @@ export class RiskService {
     id: string;
     customerId: string;
     requestedAmountCents: number;
-    requestedTermMonths: number;
+    requestedTermCount: number;
     incomeCents: number | null;
     existingDebtCents: number | null;
     customer: { status: string; monthlyIncomeCents: number | null };
@@ -192,7 +192,7 @@ export class RiskService {
 
     return {
       requestedAmount: Money.fromMinorUnits(application.requestedAmountCents),
-      requestedTermMonths: application.requestedTermMonths,
+      requestedTermCount: application.requestedTermCount,
       monthlyIncome: resolveIncome(application.incomeCents, application.customer.monthlyIncomeCents),
       existingDebt: Money.fromMinorUnits(application.existingDebtCents ?? 0),
       currentExposure: exposure,

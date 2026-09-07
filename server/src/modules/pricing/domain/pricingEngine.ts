@@ -2,7 +2,7 @@ import { Money } from "../../../shared/money.js";
 import type { RiskGrade } from "../../risk/domain/riskEngine.js";
 import type { CalculationMethod, RateUnit } from "../../repayment/domain/interestEngine.js";
 import type { RepaymentMethod } from "../../repayment/domain/repaymentEngine.js";
-import { RepaymentEngine } from "../../repayment/domain/repaymentEngine.js";
+import { RepaymentEngine, type TermUnit } from "../../repayment/domain/repaymentEngine.js";
 import { PricingUnavailableError } from "../../../shared/errors.js";
 import type { SettlementPolicy } from "../../repayment/domain/settlementPolicy.js";
 
@@ -18,7 +18,7 @@ export interface FeeRule {
 
 export interface PricingInput {
   approvedAmount: Money;
-  termMonths: number;
+  termCount: number;
   riskGrade: RiskGrade;
   product: {
     id: string;
@@ -28,8 +28,10 @@ export interface PricingInput {
     repaymentMethod: RepaymentMethod;
     minAmount: Money;
     maxAmount: Money;
-    minTermMonths: number;
-    maxTermMonths: number;
+    minTermCount: number;
+    maxTermCount: number;
+    /** Whether the term counts are days or months. Defaults to MONTH. */
+    termUnit?: TermUnit;
     feeRules: FeeRule[];
     settlementPolicy: SettlementPolicy;
   };
@@ -58,7 +60,8 @@ export interface LoanOfferResult {
   ratePercent: number;
   rateUnit: RateUnit;
   calculationMethod: CalculationMethod;
-  termMonths: number;
+  termCount: number;
+  termUnit: TermUnit;
   repaymentMethod: RepaymentMethod;
   settlementPolicy: SettlementPolicy;
   fees: PricedFee[];
@@ -113,7 +116,7 @@ export const PricingEngine = {
         throw new PricingUnavailableError("additional advance is above the product maximum");
       }
     }
-    if (input.termMonths < input.product.minTermMonths || input.termMonths > input.product.maxTermMonths) {
+    if (input.termCount < input.product.minTermCount || input.termCount > input.product.maxTermCount) {
       throw new PricingUnavailableError("requested term is outside the product term range");
     }
 
@@ -128,10 +131,13 @@ export const PricingEngine = {
 
     // Interest is derived from the schedule the customer will actually be
     // held to, so the offer and the schedule can never disagree.
+    const termUnit = input.product.termUnit ?? "MONTH";
     const schedule = RepaymentEngine.generateSchedule({
       principal: input.approvedAmount,
       ratePercent,
-      termMonths: input.termMonths,
+      rateUnit: input.product.rateUnit,
+      termCount: input.termCount,
+      termUnit,
       startDate: new Date(0), // dates are irrelevant to the totals; the real schedule is built at loan creation
       repaymentMethod: input.product.repaymentMethod,
     });
@@ -141,7 +147,8 @@ export const PricingEngine = {
       ratePercent,
       rateUnit: input.product.rateUnit,
       calculationMethod: input.product.calculationMethod,
-      termMonths: input.termMonths,
+      termCount: input.termCount,
+      termUnit,
       repaymentMethod: input.product.repaymentMethod,
       settlementPolicy: input.product.settlementPolicy,
       fees,

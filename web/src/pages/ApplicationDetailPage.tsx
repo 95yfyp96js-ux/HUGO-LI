@@ -18,7 +18,7 @@ interface ApplicationDetail {
   applicationNumber: string;
   status: string;
   requestedAmountCents: number;
-  requestedTermMonths: number;
+  requestedTermCount: number;
   purpose: string | null;
   incomeCents: number | null;
   existingDebtCents: number | null;
@@ -57,7 +57,7 @@ interface ApplicationDetail {
     approvedAmountCents: number;
     ratePercent: number;
     rateUnit: string;
-    termMonths: number;
+    termCount: number;
     feesCents: number;
     repaymentMethod: string;
     totalInterestCents: number;
@@ -198,7 +198,7 @@ export function ApplicationDetailPage() {
           <h2 className="mb-4 text-sm font-semibold text-slate-700">申請內容</h2>
           <dl className="grid grid-cols-2 gap-4">
             <Field label="申請金額">{money(data.requestedAmountCents / 100)}</Field>
-            <Field label="申請期數">{data.requestedTermMonths} 期</Field>
+            <Field label="申請期數">{data.requestedTermCount} 期</Field>
             <Field label="產品">{data.requestedProduct.name}</Field>
             <Field label="產品利率">
               {percent(data.requestedProduct.ratePercent, data.requestedProduct.rateUnit)}
@@ -315,7 +315,7 @@ export function ApplicationDetailPage() {
               <dl className="grid grid-cols-2 gap-4">
                 <Field label="核准金額">{money(offer.approvedAmountCents / 100)}</Field>
                 <Field label="放款利率">{percent(offer.ratePercent, offer.rateUnit)}</Field>
-                <Field label="期數">{offer.termMonths} 期</Field>
+                <Field label="期數">{offer.termCount} 期</Field>
                 <Field label="還款方式">
                   {REPAYMENT_METHOD_LABELS[offer.repaymentMethod] ?? offer.repaymentMethod}
                 </Field>

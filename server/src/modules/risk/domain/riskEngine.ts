@@ -7,7 +7,7 @@ export const RISK_MODEL_VERSION = "rule-based-v1";
 
 export interface RiskEngineInput {
   requestedAmount: Money;
-  requestedTermMonths: number;
+  requestedTermCount: number;
   monthlyIncome: Money | null;
   existingDebt: Money;
   currentExposure: Money;
@@ -110,7 +110,7 @@ const rules: RiskRule[] = [
       }
       // Monthly obligation proxy: (existing debt + requested amount) spread over the term.
       const totalObligation = i.existingDebt.add(i.requestedAmount);
-      const monthlyObligation = totalObligation.toMajorUnitsNumber() / Math.max(i.requestedTermMonths, 1);
+      const monthlyObligation = totalObligation.toMajorUnitsNumber() / Math.max(i.requestedTermCount, 1);
       const ratio = monthlyObligation / i.monthlyIncome.toMajorUnitsNumber();
       const value = ratio.toFixed(2);
       if (ratio <= 0.3) return { value, points: 0 };

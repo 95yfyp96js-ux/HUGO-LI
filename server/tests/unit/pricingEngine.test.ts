@@ -12,15 +12,15 @@ const product: PricingInput["product"] = {
   repaymentMethod: "INTEREST_ONLY",
   minAmount: m(10000),
   maxAmount: m(500000),
-  minTermMonths: 1,
-  maxTermMonths: 24,
+  minTermCount: 1,
+  maxTermCount: 24,
   feeRules: [],
   settlementPolicy: "FULL_CONTRACT_INTEREST",
 };
 
 const base: PricingInput = {
   approvedAmount: m(50000),
-  termMonths: 3,
+  termCount: 3,
   riskGrade: "A",
   product,
 };
@@ -86,7 +86,7 @@ describe("PricingEngine", () => {
   });
 
   it("refuses to price outside the product's term range", () => {
-    expect(() => PricingEngine.priceOffer({ ...base, termMonths: 36 })).toThrow(/term range/);
+    expect(() => PricingEngine.priceOffer({ ...base, termCount: 36 })).toThrow(/term range/);
   });
 
   it("refuses a non-positive amount", () => {
@@ -156,7 +156,7 @@ describe("PricingEngine", () => {
 
     it("still enforces the term range on a rollover", () => {
       expect(() =>
-        PricingEngine.priceOffer({ ...base, termMonths: 99, carriedAmount: m(50000) })
+        PricingEngine.priceOffer({ ...base, termCount: 99, carriedAmount: m(50000) })
       ).toThrow(/term range/);
     });
   });

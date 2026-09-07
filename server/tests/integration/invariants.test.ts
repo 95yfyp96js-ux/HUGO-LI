@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 /** Drives an application all the way to a live, disbursed loan. */
 async function originateLoan(
   env: Awaited<ReturnType<typeof createTestEnv>>,
-  options: { amount?: number; termMonths?: number; identityNumber?: string } = {}
+  options: { amount?: number; termCount?: number; identityNumber?: string } = {}
 ) {
   const customer = await env.container.customers.create(
     {
@@ -25,7 +25,7 @@ async function originateLoan(
       customerId: customer.id,
       requestedProductId: env.users.productId,
       requestedAmount: options.amount ?? 50000,
-      requestedTermMonths: options.termMonths ?? 3,
+      requestedTermCount: options.termCount ?? 3,
       income: 80000,
       existingDebt: 0,
     },
@@ -99,7 +99,7 @@ describe("Domain invariants", () => {
 
     const { renewal, newLoan } = await env.container.renewals.renew(
       loanId,
-      { idempotencyKey: randomUUID(), reason: "客戶申請續借", termMonths: 3 },
+      { idempotencyKey: randomUUID(), reason: "客戶申請續借", termCount: 3 },
       ctx(env.users.userIds.MANAGER!)
     );
 
@@ -204,7 +204,7 @@ describe("Domain invariants", () => {
         customerId: customer.id,
         requestedProductId: env.users.productId,
         requestedAmount: 30000,
-        requestedTermMonths: 3,
+        requestedTermCount: 3,
       },
       ctx(env.users.userIds.LOAN_OFFICER!)
     );

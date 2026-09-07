@@ -31,7 +31,7 @@ interface LoanDetail {
   snapshot: {
     ratePercent: number;
     rateUnit: string;
-    termMonths: number;
+    termCount: number;
     repaymentMethod: string;
     calculationMethod: string;
     productVersion: number;
@@ -222,7 +222,7 @@ export function LoanDetailPage() {
             {loan.snapshot ? (
               <dl className="grid grid-cols-2 gap-4">
                 <Field label="利率">{percent(loan.snapshot.ratePercent, loan.snapshot.rateUnit)}</Field>
-                <Field label="期數">{loan.snapshot.termMonths} 期</Field>
+                <Field label="期數">{loan.snapshot.termCount} 期</Field>
                 <Field label="還款方式">
                   {REPAYMENT_METHOD_LABELS[loan.snapshot.repaymentMethod] ?? loan.snapshot.repaymentMethod}
                 </Field>
@@ -534,7 +534,7 @@ function LoanActionDialog({
 }) {
   const [reason, setReason] = useState("");
   const [additionalAmount, setAdditionalAmount] = useState("");
-  const [termMonths, setTermMonths] = useState("3");
+  const [termCount, setTermCount] = useState("3");
   const [extensionMonths, setExtensionMonths] = useState("1");
   const [fee, setFee] = useState("0");
   const [idempotencyKey] = useState(newIdempotencyKey);
@@ -548,7 +548,7 @@ function LoanActionDialog({
             body: {
               reason,
               additionalAmount: additionalAmount || undefined,
-              termMonths: Number(termMonths),
+              termCount: Number(termCount),
             },
           })
         : api(`/api/loans/${loanId}/extend`, {
@@ -593,8 +593,8 @@ function LoanActionDialog({
                 <input id="loan-f2"
                   className="input tabular"
                   inputMode="numeric"
-                  value={termMonths}
-                  onChange={(e) => setTermMonths(e.target.value)}
+                  value={termCount}
+                  onChange={(e) => setTermCount(e.target.value)}
                 />
               </div>
             </>

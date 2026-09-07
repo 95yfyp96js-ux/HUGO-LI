@@ -5,13 +5,13 @@ import type { AuditContext, AuditService } from "../../audit/application/auditSe
 import { PricingEngine, type FeeRule } from "../domain/pricingEngine.js";
 import type { RiskGrade } from "../../risk/domain/riskEngine.js";
 import type { CalculationMethod, RateUnit } from "../../repayment/domain/interestEngine.js";
-import type { RepaymentMethod } from "../../repayment/domain/repaymentEngine.js";
+import type { RepaymentMethod, TermUnit } from "../../repayment/domain/repaymentEngine.js";
 import type { SettlementPolicy } from "../../repayment/domain/settlementPolicy.js";
 
 export interface CreateOfferInput {
   applicationId: string;
   approvedAmount: Money;
-  termMonths: number;
+  termCount: number;
   riskGrade: RiskGrade;
   collateralValue?: Money | null;
   /** Balance rolled over from an existing loan on the same product. */
@@ -35,7 +35,7 @@ export class PricingService {
 
     const priced = PricingEngine.priceOffer({
       approvedAmount: input.approvedAmount,
-      termMonths: input.termMonths,
+      termCount: input.termCount,
       riskGrade: input.riskGrade,
       collateralValue: input.collateralValue ?? null,
       carriedAmount: input.carriedAmount ?? null,
@@ -47,8 +47,9 @@ export class PricingService {
         repaymentMethod: product.repaymentMethod as RepaymentMethod,
         minAmount: Money.fromMinorUnits(product.minAmountCents),
         maxAmount: Money.fromMinorUnits(product.maxAmountCents),
-        minTermMonths: product.minTermMonths,
-        maxTermMonths: product.maxTermMonths,
+        minTermCount: product.minTermCount,
+        maxTermCount: product.maxTermCount,
+        termUnit: product.termUnit as TermUnit,
         feeRules: JSON.parse(product.feeRules) as FeeRule[],
         settlementPolicy: product.settlementPolicy as SettlementPolicy,
       },
@@ -62,7 +63,8 @@ export class PricingService {
         ratePercent: priced.ratePercent,
         rateUnit: priced.rateUnit,
         calculationMethod: priced.calculationMethod,
-        termMonths: priced.termMonths,
+        termCount: priced.termCount,
+        termUnit: priced.termUnit,
         feesCents: priced.totalFees.toMinorUnits(),
         repaymentMethod: priced.repaymentMethod,
         settlementPolicy: priced.settlementPolicy,
@@ -79,7 +81,7 @@ export class PricingService {
       after: {
         approvedAmount: priced.approvedAmount.toMajorUnitsString(),
         ratePercent: priced.ratePercent,
-        termMonths: priced.termMonths,
+        termCount: priced.termCount,
         totalPayable: priced.totalPayable.toMajorUnitsString(),
       },
       metadata: { applicationId: application.id, pricingVersion: priced.pricingVersion },

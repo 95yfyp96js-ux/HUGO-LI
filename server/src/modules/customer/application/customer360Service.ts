@@ -146,7 +146,7 @@ export class Customer360Service {
         applicationNumber: a.applicationNumber,
         status: a.status,
         requestedAmount: Money.fromMinorUnits(a.requestedAmountCents).toMajorUnitsString(),
-        requestedTermMonths: a.requestedTermMonths,
+        requestedTermCount: a.requestedTermCount,
         productName: a.requestedProduct.name,
         createdAt: a.createdAt,
       })),

@@ -28,7 +28,7 @@ export interface LoanRow {
   maturityDate: string | null;
   riskGrade: string | null;
   customer: { id: string; name: string; customerNumber: string };
-  snapshot: { ratePercent: number; rateUnit: string; termMonths: number } | null;
+  snapshot: { ratePercent: number; rateUnit: string; termCount: number } | null;
 }
 
 const FILTERS = [

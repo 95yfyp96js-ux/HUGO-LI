@@ -19,7 +19,7 @@ interface ApplicationRow {
   applicationNumber: string;
   status: string;
   requestedAmountCents: number;
-  requestedTermMonths: number;
+  requestedTermCount: number;
   createdAt: string;
   customer: { id: string; name: string; customerNumber: string };
   requestedProduct: { id: string; name: string };
@@ -112,7 +112,7 @@ export function ApplicationsPage() {
               cell: (row) => <Money value={row.requestedAmountCents / 100} />,
               className: "text-right",
             },
-            { header: "期數", cell: (row) => `${row.requestedTermMonths} 期` },
+            { header: "期數", cell: (row) => `${row.requestedTermCount} 期` },
             { header: "風險", cell: (row) => <RiskGradeBadge grade={row.riskAssessments[0]?.grade ?? null} /> },
             {
               header: "建議額度",

@@ -3,6 +3,7 @@ import { Money } from "../../../shared/money.js";
 import { ProductNotFoundError, ValidationError } from "../../../shared/errors.js";
 import type { AuditContext, AuditService } from "../../audit/application/auditService.js";
 import type { FeeRule } from "../../pricing/domain/pricingEngine.js";
+import type { TermUnit } from "../../repayment/domain/repaymentEngine.js";
 import {
   DEFAULT_SETTLEMENT_POLICY,
   isSettlementPolicy,
@@ -15,11 +16,19 @@ export interface CreateProductInput {
   description?: string | null;
   minAmount: string | number;
   maxAmount: string | number;
-  minTermMonths: number;
-  maxTermMonths: number;
+  minTermCount: number;
+  maxTermCount: number;
+  /** Whether the term counts are days or months. */
+  termUnit?: TermUnit;
   ratePercent: number;
   rateUnit: "DAILY" | "MONTHLY" | "ANNUAL";
-  calculationMethod: "SIMPLE_INTEREST" | "AMORTIZED" | "COMPOUND" | "CUSTOM";
+  /**
+   * Only simple interest is offered. Amortised and compound schedules are
+   * modelled in the engines but are not exposed as product options, so no
+   * product can be configured onto a calculation the business has not agreed
+   * to price and disclose.
+   */
+  calculationMethod?: "SIMPLE_INTEREST";
   repaymentMethod: "INTEREST_ONLY" | "PRINCIPAL_AND_INTEREST" | "PRINCIPAL_ONLY" | "BULLET" | "CUSTOM";
   settlementPolicy?: SettlementPolicy;
   feeRules?: FeeRule[];
@@ -27,8 +36,18 @@ export interface CreateProductInput {
 
 export type UpdateProductInput = Partial<CreateProductInput> & { status?: string };
 
-/** Terms that define the price of a contract. Changing any of these versions the product. */
-const PRICING_FIELDS = [
+/**
+ * Terms a borrower was quoted on. Changing any of them creates a new product
+ * version rather than editing in place.
+ *
+ * The amount and term bounds are in this list deliberately. They decide who
+ * could have been offered the product at all, so moving them silently would
+ * make the historical record of an offer unreconstructable — a loan would
+ * appear to have been written outside limits that were different at the time.
+ * Only presentation (name, description) and lifecycle (status) can be edited
+ * without a version.
+ */
+const VERSIONED_FIELDS = [
   "ratePercent",
   "rateUnit",
   "calculationMethod",
@@ -37,7 +56,16 @@ const PRICING_FIELDS = [
   // What early settlement costs is a priced term, so changing it must create
   // a new version rather than silently rewriting live contracts.
   "settlementPolicy",
+  "minAmount",
+  "maxAmount",
+  "minTermCount",
+  "maxTermCount",
+  "termUnit",
 ] as const;
+
+function isTermUnit(value: string): value is TermUnit {
+  return value === "DAY" || value === "MONTH";
+}
 
 export class ProductService {
   constructor(
@@ -51,10 +79,19 @@ export class ProductService {
     if (maxAmount.lessThan(minAmount)) {
       throw new ValidationError("maxAmount must be greater than or equal to minAmount");
     }
-    if (input.maxTermMonths < input.minTermMonths) {
-      throw new ValidationError("maxTermMonths must be greater than or equal to minTermMonths");
+    if (input.maxTermCount < input.minTermCount) {
+      throw new ValidationError("maxTermCount must be greater than or equal to minTermCount");
     }
     if (input.ratePercent < 0) throw new ValidationError("ratePercent cannot be negative");
+    if (input.minTermCount < 1) throw new ValidationError("minTermCount must be at least 1");
+    if (input.termUnit && !isTermUnit(input.termUnit)) {
+      throw new ValidationError("termUnit must be DAY or MONTH", { termUnit: input.termUnit });
+    }
+    if (input.calculationMethod && input.calculationMethod !== "SIMPLE_INTEREST") {
+      throw new ValidationError("Only SIMPLE_INTEREST products may be offered", {
+        calculationMethod: input.calculationMethod,
+      });
+    }
     if (input.settlementPolicy && !isSettlementPolicy(input.settlementPolicy)) {
       throw new ValidationError("Unknown settlementPolicy", { settlementPolicy: input.settlementPolicy });
     }
@@ -66,11 +103,12 @@ export class ProductService {
         description: input.description ?? null,
         minAmountCents: minAmount.toMinorUnits(),
         maxAmountCents: maxAmount.toMinorUnits(),
-        minTermMonths: input.minTermMonths,
-        maxTermMonths: input.maxTermMonths,
+        minTermCount: input.minTermCount,
+        maxTermCount: input.maxTermCount,
+        termUnit: input.termUnit ?? "MONTH",
         ratePercent: input.ratePercent,
         rateUnit: input.rateUnit,
-        calculationMethod: input.calculationMethod,
+        calculationMethod: "SIMPLE_INTEREST",
         repaymentMethod: input.repaymentMethod,
         settlementPolicy: input.settlementPolicy ?? DEFAULT_SETTLEMENT_POLICY,
         feeRules: JSON.stringify(input.feeRules ?? []),
@@ -99,28 +137,36 @@ export class ProductService {
     const existing = await this.db.loanProduct.findUnique({ where: { id } });
     if (!existing) throw new ProductNotFoundError(id);
 
-    const changesPricing = PRICING_FIELDS.some((field) => {
+    if (input.calculationMethod && input.calculationMethod !== "SIMPLE_INTEREST") {
+      throw new ValidationError("Only SIMPLE_INTEREST products may be offered", {
+        calculationMethod: input.calculationMethod,
+      });
+    }
+    if (input.termUnit && !isTermUnit(input.termUnit)) {
+      throw new ValidationError("termUnit must be DAY or MONTH", { termUnit: input.termUnit });
+    }
+
+    const changesTerms = VERSIONED_FIELDS.some((field) => {
       if (input[field] === undefined) return false;
       if (field === "feeRules") return JSON.stringify(input.feeRules) !== existing.feeRules;
+      // Amounts are compared in minor units so 1000 and "1000.00" are the
+      // same value rather than a spurious new version.
+      if (field === "minAmount") {
+        return Money.fromMajorUnits(input.minAmount!).toMinorUnits() !== existing.minAmountCents;
+      }
+      if (field === "maxAmount") {
+        return Money.fromMajorUnits(input.maxAmount!).toMinorUnits() !== existing.maxAmountCents;
+      }
       return input[field] !== (existing as Record<string, unknown>)[field];
     });
 
-    if (!changesPricing) {
+    if (!changesTerms) {
       const updated = await this.db.loanProduct.update({
         where: { id },
+        // Nothing here changes what anyone was quoted, so it edits in place.
         data: {
           name: input.name ?? existing.name,
           description: input.description !== undefined ? input.description : existing.description,
-          minAmountCents:
-            input.minAmount !== undefined
-              ? Money.fromMajorUnits(input.minAmount).toMinorUnits()
-              : existing.minAmountCents,
-          maxAmountCents:
-            input.maxAmount !== undefined
-              ? Money.fromMajorUnits(input.maxAmount).toMinorUnits()
-              : existing.maxAmountCents,
-          minTermMonths: input.minTermMonths ?? existing.minTermMonths,
-          maxTermMonths: input.maxTermMonths ?? existing.maxTermMonths,
           status: input.status ?? existing.status,
         },
       });
@@ -151,8 +197,9 @@ export class ProductService {
             input.maxAmount !== undefined
               ? Money.fromMajorUnits(input.maxAmount).toMinorUnits()
               : existing.maxAmountCents,
-          minTermMonths: input.minTermMonths ?? existing.minTermMonths,
-          maxTermMonths: input.maxTermMonths ?? existing.maxTermMonths,
+          minTermCount: input.minTermCount ?? existing.minTermCount,
+          maxTermCount: input.maxTermCount ?? existing.maxTermCount,
+          termUnit: input.termUnit ?? existing.termUnit,
           ratePercent: input.ratePercent ?? existing.ratePercent,
           rateUnit: input.rateUnit ?? existing.rateUnit,
           calculationMethod: input.calculationMethod ?? existing.calculationMethod,

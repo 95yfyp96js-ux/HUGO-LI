@@ -136,8 +136,8 @@ async function seedProducts() {
       description: "一般客戶適用，按月付息、到期還本",
       minAmountCents: Money.fromMajorUnits(10000).toMinorUnits(),
       maxAmountCents: Money.fromMajorUnits(500000).toMinorUnits(),
-      minTermMonths: 1,
-      maxTermMonths: 12,
+      minTermCount: 1,
+      maxTermCount: 12,
       ratePercent: 2.5,
       rateUnit: "MONTHLY",
       calculationMethod: "SIMPLE_INTEREST",
@@ -152,8 +152,8 @@ async function seedProducts() {
       description: "本息平均攤還，適合固定收入客戶",
       minAmountCents: Money.fromMajorUnits(20000).toMinorUnits(),
       maxAmountCents: Money.fromMajorUnits(300000).toMinorUnits(),
-      minTermMonths: 3,
-      maxTermMonths: 24,
+      minTermCount: 3,
+      maxTermCount: 24,
       ratePercent: 2.0,
       rateUnit: "MONTHLY",
       calculationMethod: "SIMPLE_INTEREST",
@@ -166,10 +166,27 @@ async function seedProducts() {
       description: "一次到期清償，適合短期資金缺口",
       minAmountCents: Money.fromMajorUnits(5000).toMinorUnits(),
       maxAmountCents: Money.fromMajorUnits(150000).toMinorUnits(),
-      minTermMonths: 1,
-      maxTermMonths: 3,
+      minTermCount: 1,
+      maxTermCount: 3,
       ratePercent: 3.0,
       rateUnit: "MONTHLY",
+      calculationMethod: "SIMPLE_INTEREST",
+      repaymentMethod: "BULLET",
+      feeRules: "[]",
+    },
+    {
+      // The only day-term product: its term is counted in days and its rate is
+      // quoted per day, so 7 days at 0.1% costs 0.7% of principal in total.
+      productCode: "SL-DAILY",
+      name: "短天期單利",
+      description: "以日計息、一次到期清償，7 至 30 天的短期練習用商品",
+      minAmountCents: Money.fromMajorUnits(10000).toMinorUnits(),
+      maxAmountCents: Money.fromMajorUnits(200000).toMinorUnits(),
+      minTermCount: 7,
+      maxTermCount: 30,
+      termUnit: "DAY",
+      ratePercent: 0.1,
+      rateUnit: "DAILY",
       calculationMethod: "SIMPLE_INTEREST",
       repaymentMethod: "BULLET",
       feeRules: "[]",
@@ -246,17 +263,23 @@ async function main() {
     clock.set(openedAt);
 
     const amount = randomInt(2, 20) * 10000;
-    const term = randomInt(product.minTermMonths, Math.min(product.maxTermMonths, 6));
+    // Cap only month terms at 6; a day-term product's own range is the limit.
+    const term =
+      product.termUnit === "DAY"
+        ? randomInt(product.minTermCount, product.maxTermCount)
+        : randomInt(product.minTermCount, Math.min(product.maxTermCount, 6));
 
     const application = await container.applications.create(
       {
         customerId: customer.id,
         requestedProductId: product.id,
-        requestedAmount: Math.max(
-          amount,
-          Money.fromMinorUnits(product.minAmountCents).toMajorUnitsNumber()
+        // Clamped into the product's published range, which applications are
+        // now validated against.
+        requestedAmount: Math.min(
+          Math.max(amount, Money.fromMinorUnits(product.minAmountCents).toMajorUnitsNumber()),
+          Money.fromMinorUnits(product.maxAmountCents).toMajorUnitsNumber()
         ),
-        requestedTermMonths: term,
+        requestedTermCount: term,
         purpose: pick(PURPOSES),
         income: customer.monthlyIncomeCents
           ? Money.fromMinorUnits(customer.monthlyIncomeCents).toMajorUnitsNumber()
@@ -408,7 +431,7 @@ async function main() {
   for (const loan of renewable) {
     await container.renewals.renew(
       loan.id,
-      { reason: "客戶申請續借，延長還款期間", termMonths: 3, idempotencyKey: `seed-renew-${loan.id}` },
+      { reason: "客戶申請續借，延長還款期間", termCount: 3, idempotencyKey: `seed-renew-${loan.id}` },
       managerContext
     );
   }

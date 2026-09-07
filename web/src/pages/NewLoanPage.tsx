@@ -35,8 +35,8 @@ interface Product {
   rateUnit: string;
   minAmount: string;
   maxAmount: string;
-  minTermMonths: number;
-  maxTermMonths: number;
+  minTermCount: number;
+  maxTermCount: number;
 }
 
 interface SubmitResult {
@@ -54,7 +54,7 @@ interface SubmitResult {
     approvedAmountCents: number;
     ratePercent: number;
     rateUnit: string;
-    termMonths: number;
+    termCount: number;
     feesCents: number;
     repaymentMethod: string;
     totalInterestCents: number;
@@ -85,7 +85,7 @@ export function NewLoanPage() {
   const [form, setForm] = useState({
     requestedProductId: "",
     requestedAmount: "",
-    requestedTermMonths: "3",
+    requestedTermCount: "3",
     purpose: "",
     income: "",
     existingDebt: "",
@@ -114,7 +114,7 @@ export function NewLoanPage() {
           customerId: customer!.id,
           requestedProductId: form.requestedProductId,
           requestedAmount: form.requestedAmount,
-          requestedTermMonths: Number(form.requestedTermMonths),
+          requestedTermCount: Number(form.requestedTermCount),
           purpose: form.purpose || null,
           income: form.income || null,
           existingDebt: form.existingDebt || null,
@@ -272,8 +272,8 @@ export function NewLoanPage() {
               <input id="newl-f3"
                 className="input tabular"
                 inputMode="numeric"
-                value={form.requestedTermMonths}
-                onChange={(e) => setForm((f) => ({ ...f, requestedTermMonths: e.target.value }))}
+                value={form.requestedTermCount}
+                onChange={(e) => setForm((f) => ({ ...f, requestedTermCount: e.target.value }))}
               />
             </div>
             <div>
@@ -376,7 +376,7 @@ export function NewLoanPage() {
               <Field label="放款利率">
                 {percent(underwriting.offer.ratePercent, underwriting.offer.rateUnit)}
               </Field>
-              <Field label="期數">{underwriting.offer.termMonths} 期</Field>
+              <Field label="期數">{underwriting.offer.termCount} 期</Field>
               <Field label="還款方式">
                 {REPAYMENT_METHOD_LABELS[underwriting.offer.repaymentMethod] ??
                   underwriting.offer.repaymentMethod}

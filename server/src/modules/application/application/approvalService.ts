@@ -11,7 +11,7 @@ export interface ApprovalCondition {
 
 export interface ApproveInput {
   approvedAmount?: string | number;
-  approvedTermMonths?: number;
+  approvedTermCount?: number;
   approvedRatePercent?: number;
   conditions?: ApprovalCondition[];
   reason?: string | null;
@@ -48,7 +48,7 @@ export class ApprovalService {
       input.approvedAmount !== undefined
         ? Money.fromMajorUnits(input.approvedAmount)
         : Money.fromMinorUnits(offer.approvedAmountCents);
-    const approvedTermMonths = input.approvedTermMonths ?? offer.termMonths;
+    const approvedTermCount = input.approvedTermCount ?? offer.termCount;
     const approvedRatePercent = input.approvedRatePercent ?? offer.ratePercent;
 
     if (!approvedAmount.isPositive()) {
@@ -65,7 +65,7 @@ export class ApprovalService {
           loanOfferId: offer.id,
           decision,
           approvedAmountCents: approvedAmount.toMinorUnits(),
-          approvedTermMonths,
+          approvedTermCount,
           approvedRatePercent,
           conditions: JSON.stringify(conditions),
           reason: input.reason ?? null,
@@ -88,7 +88,7 @@ export class ApprovalService {
         status: "APPROVED",
         decision,
         approvedAmount: approvedAmount.toMajorUnitsString(),
-        approvedTermMonths,
+        approvedTermCount,
         approvedRatePercent,
       },
       reason: input.reason ?? null,

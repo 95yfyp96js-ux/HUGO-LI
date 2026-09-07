@@ -120,7 +120,7 @@ model LendingApplication {
   requestedProductId   String
   requestedProduct     LoanProduct @relation(fields: [requestedProductId], references: [id])
   requestedAmountCents Int
-  requestedTermMonths  Int
+  requestedTermCount  Int
   purpose              String?
   incomeCents          Int?
   existingDebtCents    Int?
@@ -205,8 +205,13 @@ model LoanProduct {
   description       String?
   minAmountCents    Int
   maxAmountCents    Int
-  minTermMonths     Int
-  maxTermMonths     Int
+  minTermCount     Int
+  maxTermCount     Int
+  // What minTermCount/maxTermCount are counted in. A term of "7" means seven
+  // days under DAY and seven months under MONTH, and the rate period is
+  // converted to match, so a daily-rate product and a monthly-rate product
+  // are the same arithmetic with a different period.
+  termUnit          String   @default("MONTH") // DAY | MONTH
   ratePercent       Float // percent per rateUnit, e.g. 2.5 = 2.5%
   rateUnit          String // DAILY | MONTHLY | ANNUAL
   calculationMethod String // SIMPLE_INTEREST | AMORTIZED | COMPOUND | CUSTOM
@@ -236,7 +241,8 @@ model LoanOffer {
   ratePercent        Float
   rateUnit           String
   calculationMethod  String
-  termMonths         Int
+  termCount          Int
+  termUnit           String   @default("MONTH") // DAY | MONTH
   feesCents          Int
   repaymentMethod    String
   settlementPolicy   String   @default("FULL_CONTRACT_INTEREST")
@@ -260,7 +266,7 @@ model LoanApproval {
   loanOffer          LoanOffer?         @relation(fields: [loanOfferId], references: [id])
   decision           String // PENDING | APPROVED | REJECTED | CONDITIONAL
   approvedAmountCents Int?
-  approvedTermMonths Int?
+  approvedTermCount Int?
   approvedRatePercent Float?
   conditions         String  @default("[]") // JSON-encoded ApprovalCondition[]
   reason             String?
@@ -321,7 +327,8 @@ model LoanSnapshot {
   ratePercent           Float
   rateUnit              String
   calculationMethod     String
-  termMonths            Int
+  termCount             Int
+  termUnit              String   @default("MONTH") // DAY | MONTH
   repaymentMethod       String
   settlementPolicy      String   @default("FULL_CONTRACT_INTEREST")
   productId             String

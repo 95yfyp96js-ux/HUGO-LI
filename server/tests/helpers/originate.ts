@@ -14,7 +14,7 @@ export async function originateLoan(
   env: Env,
   options: {
     amount?: number;
-    termMonths?: number;
+    termCount?: number;
     monthlyIncome?: number;
     name?: string;
     identityNumber?: string;
@@ -43,7 +43,7 @@ export async function originateLoan(
       customerId,
       requestedProductId: env.users.productId,
       requestedAmount: options.amount ?? 50000,
-      requestedTermMonths: options.termMonths ?? 3,
+      requestedTermCount: options.termCount ?? 3,
       income: options.monthlyIncome ?? 80000,
       existingDebt: 0,
     },

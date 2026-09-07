@@ -11,7 +11,7 @@ describe("RepaymentEngine", () => {
     const schedule = RepaymentEngine.generateSchedule({
       principal: Money.fromMajorUnits(50000),
       ratePercent: 2.5,
-      termMonths: 3,
+      termCount: 3,
       startDate: START,
       repaymentMethod: "INTEREST_ONLY",
     });
@@ -63,7 +63,7 @@ describe("RepaymentEngine", () => {
     const schedule = RepaymentEngine.generateSchedule({
       principal: Money.fromMajorUnits(50000),
       ratePercent: 2.5,
-      termMonths: 3,
+      termCount: 3,
       startDate: START,
       repaymentMethod: "PRINCIPAL_AND_INTEREST",
     });
@@ -83,7 +83,7 @@ describe("RepaymentEngine", () => {
       const interestOnly = RepaymentEngine.generateSchedule({
         principal: Money.fromMajorUnits(50000),
         ratePercent: 2.5,
-        termMonths: 3,
+        termCount: 3,
         startDate: START,
         repaymentMethod: "INTEREST_ONLY",
       });
@@ -95,7 +95,7 @@ describe("RepaymentEngine", () => {
     const schedule = RepaymentEngine.generateSchedule({
       principal: Money.fromMajorUnits(50000),
       ratePercent: 2.5,
-      termMonths: 3,
+      termCount: 3,
       startDate: START,
       repaymentMethod: "BULLET",
     });
@@ -108,7 +108,7 @@ describe("RepaymentEngine", () => {
     const schedule = RepaymentEngine.generateSchedule({
       principal: Money.fromMajorUnits(10000),
       ratePercent: 2.5,
-      termMonths: 3,
+      termCount: 3,
       startDate: START,
       repaymentMethod: "PRINCIPAL_ONLY",
     });
@@ -121,7 +121,7 @@ describe("RepaymentEngine", () => {
     const schedule = RepaymentEngine.generateSchedule({
       principal: Money.fromMajorUnits(10000),
       ratePercent: 1,
-      termMonths: 3,
+      termCount: 3,
       startDate: START,
       repaymentMethod: "PRINCIPAL_ONLY",
     });
@@ -134,10 +134,10 @@ describe("RepaymentEngine", () => {
       RepaymentEngine.generateSchedule({
         principal: Money.fromMajorUnits(1000),
         ratePercent: 1,
-        termMonths: 0,
+        termCount: 0,
         startDate: START,
         repaymentMethod: "INTEREST_ONLY",
       })
-    ).toThrow(/termMonths/);
+    ).toThrow(/termCount/);
   });
 });

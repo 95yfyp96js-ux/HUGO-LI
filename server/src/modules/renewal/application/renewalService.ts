@@ -5,7 +5,8 @@ import { formatSequenceNumber } from "../../../shared/ids.js";
 import type { Clock } from "../../../shared/clock.js";
 import type { AuditContext, AuditService } from "../../audit/application/auditService.js";
 import { LoanStateMachine, type LoanStatus } from "../../loan/domain/loanStateMachine.js";
-import { RepaymentEngine, type RepaymentMethod } from "../../repayment/domain/repaymentEngine.js";
+import { RepaymentEngine, type RepaymentMethod, type TermUnit } from "../../repayment/domain/repaymentEngine.js";
+import type { RateUnit } from "../../repayment/domain/interestEngine.js";
 import type { RiskService } from "../../risk/application/riskService.js";
 import type { PricingService } from "../../pricing/application/pricingService.js";
 import type { RiskGrade } from "../../risk/domain/riskEngine.js";
@@ -16,7 +17,7 @@ const SERVICING = ["ACTIVE", "DUE_SOON", "DUE", "OVERDUE", "DEFAULTED"];
 export interface RenewInput {
   /** Extra cash advanced to the customer on top of rolling the existing balance. */
   additionalAmount?: string | number;
-  termMonths?: number;
+  termCount?: number;
   reason: string;
   idempotencyKey: string;
 }
@@ -79,7 +80,7 @@ export class RenewalService {
     }
 
     const snapshot = previous.snapshot;
-    const termMonths = input.termMonths ?? snapshot.termMonths;
+    const termCount = input.termCount ?? snapshot.termCount;
     const startDate = this.clock.now();
 
     const product = await this.db.loanProduct.findUniqueOrThrow({
@@ -106,7 +107,7 @@ export class RenewalService {
         customerId: previous.customerId,
         requestedProductId: previous.productId,
         requestedAmountCents: newPrincipal.toMinorUnits(),
-        requestedTermMonths: termMonths,
+        requestedTermCount: termCount,
         purpose: `續借自 ${previous.loanNumber}`,
         incomeCents: previous.customer.monthlyIncomeCents,
         existingDebtCents: exposureExcludingThisLoan.toMinorUnits(),
@@ -150,7 +151,7 @@ export class RenewalService {
       {
         applicationId: renewalApplication.id,
         approvedAmount: newPrincipal,
-        termMonths,
+        termCount,
         riskGrade: assessment.grade as RiskGrade,
         // Already lent under this product; only new money is bound by its range.
         carriedAmount: carriedBalance,
@@ -161,7 +162,11 @@ export class RenewalService {
     const schedule = RepaymentEngine.generateSchedule({
       principal: newPrincipal,
       ratePercent: offer.ratePercent,
-      termMonths,
+      rateUnit: offer.rateUnit as RateUnit,
+      termCount,
+      // A day-term loan renews into a day-term loan; defaulting to months here
+      // would silently turn a 14-day rollover into a 14-month one.
+      termUnit: offer.termUnit as TermUnit,
       startDate,
       repaymentMethod: offer.repaymentMethod as RepaymentMethod,
     });
@@ -186,7 +191,7 @@ export class RenewalService {
           loanOfferId: offer.id,
           decision: "APPROVED",
           approvedAmountCents: newPrincipal.toMinorUnits(),
-          approvedTermMonths: termMonths,
+          approvedTermCount: termCount,
           approvedRatePercent: offer.ratePercent,
           conditions: "[]",
           reason: input.reason,
@@ -220,7 +225,8 @@ export class RenewalService {
           ratePercent: offer.ratePercent,
           rateUnit: offer.rateUnit,
           calculationMethod: offer.calculationMethod,
-          termMonths,
+          termCount,
+          termUnit: offer.termUnit,
           repaymentMethod: offer.repaymentMethod,
           settlementPolicy: offer.settlementPolicy,
           productId: product.id,

@@ -1,15 +1,57 @@
 import { Money } from "../../../shared/money.js";
-import { InterestEngine } from "./interestEngine.js";
+import { InterestEngine, type RateUnit } from "./interestEngine.js";
 import { ScheduleCalculationFailedError } from "../../../shared/errors.js";
 
 export type RepaymentMethod = "INTEREST_ONLY" | "PRINCIPAL_AND_INTEREST" | "PRINCIPAL_ONLY" | "BULLET" | "CUSTOM";
 
+/** What a term is counted in. One installment covers exactly one of these. */
+export type TermUnit = "DAY" | "MONTH";
+
+/**
+ * Days per month used to convert between a daily and a monthly rate. The same
+ * 30-day convention the pro-rata interest calculation uses, kept here so the
+ * two cannot drift apart.
+ */
+const DAYS_PER_MONTH = 30;
+const DAYS_PER_YEAR = 365;
+const MONTHS_PER_YEAR = 12;
+
 export interface RepaymentScheduleInput {
   principal: Money;
-  ratePercent: number; // percent per month, matching product rateUnit=MONTHLY assumption for v1 schedules
-  termMonths: number;
+  /** Percent per `rateUnit` period, e.g. 2.5 with MONTHLY means 2.5% a month. */
+  ratePercent: number;
+  termCount: number;
   startDate: Date;
   repaymentMethod: RepaymentMethod;
+  /** Defaults to MONTH, which is what every product did before day terms existed. */
+  termUnit?: TermUnit;
+  /** Defaults to MONTHLY, matching the historical assumption. */
+  rateUnit?: RateUnit;
+}
+
+/**
+ * Converts a rate quoted per `rateUnit` into the rate for one installment
+ * period.
+ *
+ * Without this a product quoted at an annual rate charged that whole rate on
+ * every monthly installment — twelve times the agreed price. The schedule
+ * period and the rate period are independent choices, so the conversion has
+ * to be explicit.
+ */
+export function periodRate(ratePercent: number, rateUnit: RateUnit, termUnit: TermUnit): number {
+  const perDay =
+    rateUnit === "DAILY"
+      ? ratePercent
+      : rateUnit === "MONTHLY"
+        ? ratePercent / DAYS_PER_MONTH
+        : ratePercent / DAYS_PER_YEAR;
+
+  if (termUnit === "DAY") return perDay;
+  return rateUnit === "MONTHLY"
+    ? ratePercent // exact, rather than round-tripping through days
+    : rateUnit === "ANNUAL"
+      ? ratePercent / MONTHS_PER_YEAR
+      : perDay * DAYS_PER_MONTH;
 }
 
 export interface ScheduleInstallment {
@@ -27,21 +69,35 @@ export interface LoanSchedule {
   totalPayable: Money;
 }
 
-function addMonths(date: Date, months: number): Date {
+function addPeriods(date: Date, periods: number, unit: TermUnit): Date {
   const result = new Date(date.getTime());
-  result.setMonth(result.getMonth() + months);
+  if (unit === "DAY") {
+    result.setDate(result.getDate() + periods);
+  } else {
+    result.setMonth(result.getMonth() + periods);
+  }
   return result;
 }
 
+/** The rate for one installment, and the unit its due dates advance by. */
+function periodTerms(input: RepaymentScheduleInput): { rate: number; unit: TermUnit } {
+  const unit = input.termUnit ?? "MONTH";
+  return { rate: periodRate(input.ratePercent, input.rateUnit ?? "MONTHLY", unit), unit };
+}
+
 /**
- * RepaymentEngine — the only place a LoanSchedule is generated. v1 assumes a
- * monthly rate and monthly frequency; per-installment interest is priced via
- * InterestEngine.calculateForPeriodRate so rounding rules stay in one place.
+ * RepaymentEngine — the only place a LoanSchedule is generated.
+ *
+ * A term is a count of periods and a period is a day or a month; the rate is
+ * converted to that period once, up front. A 7-day loan at 0.1% a day and a
+ * 3-month loan at 2.5% a month are therefore the same arithmetic, and
+ * per-installment interest still goes through
+ * InterestEngine.calculateForPeriodRate so rounding lives in one place.
  */
 export const RepaymentEngine = {
   generateSchedule(input: RepaymentScheduleInput): LoanSchedule {
-    if (input.termMonths <= 0) {
-      throw new ScheduleCalculationFailedError("termMonths must be positive");
+    if (input.termCount <= 0) {
+      throw new ScheduleCalculationFailedError("termCount must be positive");
     }
 
     switch (input.repaymentMethod) {
@@ -73,15 +129,16 @@ function summarize(installments: ScheduleInstallment[]): LoanSchedule {
 
 /** Interest charged on the full principal every month; principal repaid entirely in the final installment. */
 function interestOnlySchedule(input: RepaymentScheduleInput): LoanSchedule {
-  const monthlyInterest = InterestEngine.calculateForPeriodRate(input.principal, input.ratePercent);
+  const { rate, unit } = periodTerms(input);
+  const periodInterest = InterestEngine.calculateForPeriodRate(input.principal, rate);
   const installments: ScheduleInstallment[] = [];
-  for (let n = 1; n <= input.termMonths; n++) {
-    const isLast = n === input.termMonths;
+  for (let n = 1; n <= input.termCount; n++) {
+    const isLast = n === input.termCount;
     installments.push({
       installmentNumber: n,
-      dueDate: addMonths(input.startDate, n),
+      dueDate: addPeriods(input.startDate, n, unit),
       principalDue: isLast ? input.principal : Money.zero(),
-      interestDue: monthlyInterest,
+      interestDue: periodInterest,
       feeDue: Money.zero(),
     });
   }
@@ -90,20 +147,21 @@ function interestOnlySchedule(input: RepaymentScheduleInput): LoanSchedule {
 
 /** Equal principal per installment; interest computed on the declining outstanding balance. */
 function principalAndInterestSchedule(input: RepaymentScheduleInput): LoanSchedule {
+  const { rate, unit } = periodTerms(input);
   const installments: ScheduleInstallment[] = [];
   let allocatedPrincipal = Money.zero();
   let remainingBalance = input.principal;
 
-  for (let n = 1; n <= input.termMonths; n++) {
-    const isLast = n === input.termMonths;
-    const interestDue = InterestEngine.calculateForPeriodRate(remainingBalance, input.ratePercent);
-    const principalDue = isLast ? input.principal.subtract(allocatedPrincipal) : roundPrincipalShare(input.principal, input.termMonths);
+  for (let n = 1; n <= input.termCount; n++) {
+    const isLast = n === input.termCount;
+    const interestDue = InterestEngine.calculateForPeriodRate(remainingBalance, rate);
+    const principalDue = isLast ? input.principal.subtract(allocatedPrincipal) : roundPrincipalShare(input.principal, input.termCount);
     allocatedPrincipal = allocatedPrincipal.add(principalDue);
     remainingBalance = remainingBalance.subtract(principalDue);
 
     installments.push({
       installmentNumber: n,
-      dueDate: addMonths(input.startDate, n),
+      dueDate: addPeriods(input.startDate, n, unit),
       principalDue,
       interestDue,
       feeDue: Money.zero(),
@@ -112,21 +170,22 @@ function principalAndInterestSchedule(input: RepaymentScheduleInput): LoanSchedu
   return summarize(installments);
 }
 
-function roundPrincipalShare(principal: Money, termMonths: number): Money {
-  return Money.fromMinorUnits(Math.floor(principal.toMinorUnits() / termMonths));
+function roundPrincipalShare(principal: Money, termCount: number): Money {
+  return Money.fromMinorUnits(Math.floor(principal.toMinorUnits() / termCount));
 }
 
 /** No interest component; used for principal-only side arrangements. */
 function principalOnlySchedule(input: RepaymentScheduleInput): LoanSchedule {
+  const { unit } = periodTerms(input);
   const installments: ScheduleInstallment[] = [];
   let allocatedPrincipal = Money.zero();
-  for (let n = 1; n <= input.termMonths; n++) {
-    const isLast = n === input.termMonths;
-    const principalDue = isLast ? input.principal.subtract(allocatedPrincipal) : roundPrincipalShare(input.principal, input.termMonths);
+  for (let n = 1; n <= input.termCount; n++) {
+    const isLast = n === input.termCount;
+    const principalDue = isLast ? input.principal.subtract(allocatedPrincipal) : roundPrincipalShare(input.principal, input.termCount);
     allocatedPrincipal = allocatedPrincipal.add(principalDue);
     installments.push({
       installmentNumber: n,
-      dueDate: addMonths(input.startDate, n),
+      dueDate: addPeriods(input.startDate, n, unit),
       principalDue,
       interestDue: Money.zero(),
       feeDue: Money.zero(),
@@ -137,12 +196,13 @@ function principalOnlySchedule(input: RepaymentScheduleInput): LoanSchedule {
 
 /** Single installment at maturity covering principal plus interest for the whole term. */
 function bulletSchedule(input: RepaymentScheduleInput): LoanSchedule {
-  const totalInterest = InterestEngine.calculateForPeriodRate(input.principal, input.ratePercent * input.termMonths);
+  const { rate, unit } = periodTerms(input);
+  const totalInterest = InterestEngine.calculateForPeriodRate(input.principal, rate * input.termCount);
   return summarize(
     [
       {
         installmentNumber: 1,
-        dueDate: addMonths(input.startDate, input.termMonths),
+        dueDate: addPeriods(input.startDate, input.termCount, unit),
         principalDue: input.principal,
         interestDue: totalInterest,
         feeDue: Money.zero(),

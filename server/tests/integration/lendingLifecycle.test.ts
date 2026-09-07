@@ -44,7 +44,7 @@ describe("Lending lifecycle", () => {
         customerId,
         requestedProductId: env.users.productId,
         requestedAmount: 50000,
-        requestedTermMonths: 3,
+        requestedTermCount: 3,
         purpose: "營運週轉",
         income: 60000,
         existingDebt: 0,

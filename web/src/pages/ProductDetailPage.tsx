@@ -73,7 +73,7 @@ export function ProductDetailPage() {
             <Money value={data.maxAmount} />
           </Field>
           <Field label="期數範圍">
-            {data.minTermMonths} ~ {data.maxTermMonths} 期
+            {data.minTermCount} ~ {data.maxTermCount} 期
           </Field>
           <Field label="版本">v{data.version}</Field>
           <Field label="建立日期">{date(data.createdAt)}</Field>

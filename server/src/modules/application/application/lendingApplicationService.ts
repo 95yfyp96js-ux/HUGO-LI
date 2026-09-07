@@ -16,7 +16,7 @@ export interface CreateApplicationInput {
   customerId: string;
   requestedProductId: string;
   requestedAmount: string | number;
-  requestedTermMonths: number;
+  requestedTermCount: number;
   purpose?: string | null;
   income?: string | number | null;
   existingDebt?: string | number | null;
@@ -48,8 +48,33 @@ export class LendingApplicationService {
     if (!requestedAmount.isPositive()) {
       throw new ValidationError("requestedAmount must be positive");
     }
-    if (input.requestedTermMonths <= 0) {
-      throw new ValidationError("requestedTermMonths must be positive");
+    if (input.requestedTermCount <= 0) {
+      throw new ValidationError("requestedTermCount must be positive");
+    }
+
+    // Enforced here, not only in the browser: the product's published limits
+    // are what the customer was shown, so an application outside them was
+    // never offerable and should be refused at the point it is written rather
+    // than surfacing later as a pricing failure nobody can explain.
+    const minAmount = Money.fromMinorUnits(product.minAmountCents);
+    const maxAmount = Money.fromMinorUnits(product.maxAmountCents);
+    if (requestedAmount.lessThan(minAmount) || requestedAmount.greaterThan(maxAmount)) {
+      throw new ValidationError("Requested amount is outside the product's limits", {
+        requestedAmount: requestedAmount.toMajorUnitsString(),
+        minAmount: minAmount.toMajorUnitsString(),
+        maxAmount: maxAmount.toMajorUnitsString(),
+      });
+    }
+    if (
+      input.requestedTermCount < product.minTermCount ||
+      input.requestedTermCount > product.maxTermCount
+    ) {
+      throw new ValidationError("Requested term is outside the product's limits", {
+        requestedTermCount: input.requestedTermCount,
+        minTermCount: product.minTermCount,
+        maxTermCount: product.maxTermCount,
+        termUnit: product.termUnit,
+      });
     }
 
     const sequence = (await this.db.lendingApplication.count()) + 1;
@@ -59,7 +84,7 @@ export class LendingApplicationService {
         customerId: customer.id,
         requestedProductId: product.id,
         requestedAmountCents: requestedAmount.toMinorUnits(),
-        requestedTermMonths: input.requestedTermMonths,
+        requestedTermCount: input.requestedTermCount,
         purpose: input.purpose ?? null,
         incomeCents: input.income != null ? Money.fromMajorUnits(input.income).toMinorUnits() : null,
         existingDebtCents:
@@ -88,7 +113,7 @@ export class LendingApplicationService {
     if (input.requestedAmount !== undefined) {
       data.requestedAmountCents = Money.fromMajorUnits(input.requestedAmount).toMinorUnits();
     }
-    if (input.requestedTermMonths !== undefined) data.requestedTermMonths = input.requestedTermMonths;
+    if (input.requestedTermCount !== undefined) data.requestedTermCount = input.requestedTermCount;
     if (input.purpose !== undefined) data.purpose = input.purpose;
     if (input.income !== undefined) {
       data.incomeCents = input.income != null ? Money.fromMajorUnits(input.income).toMinorUnits() : null;
@@ -131,7 +156,7 @@ export class LendingApplicationService {
             {
               applicationId: application.id,
               approvedAmount: Money.fromMinorUnits(limit.recommendedAmountCents),
-              termMonths: application.requestedTermMonths,
+              termCount: application.requestedTermCount,
               riskGrade: assessment.grade as "A" | "B" | "C" | "D" | "E",
             },
             context

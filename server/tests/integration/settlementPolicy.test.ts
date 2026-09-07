@@ -109,7 +109,7 @@ describe("Settlement policy", () => {
           customerId: customer.id,
           requestedProductId: v2.id,
           requestedAmount: 50000,
-          requestedTermMonths: 3,
+          requestedTermCount: 3,
           income: 80000,
         },
         ctx(env.users.userIds.LOAN_OFFICER!)
@@ -157,7 +157,7 @@ describe("Settlement policy", () => {
           customerId: customer.id,
           requestedProductId: v2.id,
           requestedAmount: 50000,
-          requestedTermMonths: 3,
+          requestedTermCount: 3,
           income: 80000,
         },
         ctx(env.users.userIds.LOAN_OFFICER!)
@@ -185,8 +185,8 @@ describe("Settlement policy", () => {
           name: "bad",
           minAmount: 1000,
           maxAmount: 2000,
-          minTermMonths: 1,
-          maxTermMonths: 2,
+          minTermCount: 1,
+          maxTermCount: 2,
           ratePercent: 1,
           rateUnit: "MONTHLY",
           calculationMethod: "SIMPLE_INTEREST",

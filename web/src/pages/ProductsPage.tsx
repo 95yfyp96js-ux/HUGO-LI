@@ -11,8 +11,8 @@ export interface Product {
   description: string | null;
   minAmount: string;
   maxAmount: string;
-  minTermMonths: number;
-  maxTermMonths: number;
+  minTermCount: number;
+  maxTermCount: number;
   ratePercent: number;
   rateUnit: string;
   calculationMethod: string;
@@ -63,7 +63,7 @@ export function ProductsPage() {
                 </span>
               ),
             },
-            { header: "期數", cell: (row) => `${row.minTermMonths}~${row.maxTermMonths} 期` },
+            { header: "期數", cell: (row) => `${row.minTermCount}~${row.maxTermCount} 期` },
             {
               header: "還款方式",
               cell: (row) => REPAYMENT_METHOD_LABELS[row.repaymentMethod] ?? row.repaymentMethod,
