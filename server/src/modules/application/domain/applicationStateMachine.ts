@@ -12,7 +12,10 @@ export type ApplicationStatus =
 
 const machine = new StateMachine<ApplicationStatus>("LendingApplication", {
   DRAFT: ["SUBMITTED", "CANCELLED"],
-  SUBMITTED: ["UNDER_REVIEW", "CANCELLED", "EXPIRED"],
+  // Submitting runs automated underwriting, which either queues the file for
+  // normal review or refers it straight to risk. Both are legitimate landing
+  // states for a submission.
+  SUBMITTED: ["UNDER_REVIEW", "RISK_REVIEW", "CANCELLED", "EXPIRED"],
   UNDER_REVIEW: ["RISK_REVIEW", "APPROVED", "REJECTED", "CANCELLED"],
   RISK_REVIEW: ["APPROVED", "REJECTED", "CANCELLED"],
   APPROVED: [],
