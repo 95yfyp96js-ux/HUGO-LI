@@ -4,6 +4,7 @@ export type LoanStatus =
   | "CREATED"
   | "APPROVED"
   | "READY_FOR_DISBURSEMENT"
+  | "DISBURSING"
   | "DISBURSED"
   | "ACTIVE"
   | "DUE_SOON"
@@ -16,8 +17,15 @@ export type LoanStatus =
 
 const machine = new StateMachine<LoanStatus>("Loan", {
   CREATED: ["APPROVED", "READY_FOR_DISBURSEMENT", "CANCELLED"],
-  APPROVED: ["READY_FOR_DISBURSEMENT", "CANCELLED"],
-  READY_FOR_DISBURSEMENT: ["DISBURSED", "CANCELLED"],
+  APPROVED: ["READY_FOR_DISBURSEMENT", "DISBURSING", "CANCELLED"],
+  READY_FOR_DISBURSEMENT: ["DISBURSING", "CANCELLED"],
+  // DISBURSING is the claim a caller takes before contacting the payout
+  // provider. It exists so that "a payout may be in flight" is a state the
+  // database can hold: while a loan sits here nobody else can pay out on it,
+  // and a loan stuck here after a crash is exactly the reconciliation queue.
+  // It returns to the pre-disbursement status only when the provider declined
+  // and no money moved.
+  DISBURSING: ["DISBURSED", "APPROVED", "READY_FOR_DISBURSEMENT", "CANCELLED"],
   DISBURSED: ["ACTIVE"],
   // Servicing states move freely between each other as the OverdueEngine
   // re-evaluates against the clock, and any of them can settle.

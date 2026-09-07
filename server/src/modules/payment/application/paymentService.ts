@@ -5,6 +5,7 @@ import {
   InvalidPaymentError,
   LoanNotFoundError,
   ValidationError,
+  isUniqueConstraintViolation,
 } from "../../../shared/errors.js";
 import { formatSequenceNumber } from "../../../shared/ids.js";
 import type { Clock } from "../../../shared/clock.js";
@@ -146,11 +147,7 @@ export class PaymentService {
     const amount = Money.fromMajorUnits(input.amount);
     if (!amount.isPositive()) throw new InvalidPaymentError("Payment amount must be positive");
 
-    const loan = await this.db.loan.findUnique({
-      where: { id: input.loanId },
-      include: { scheduleLines: { orderBy: { installmentNumber: "asc" } }, collectionCases: true },
-    });
-    if (!loan) throw new LoanNotFoundError(input.loanId);
+    const loan = await this.loadLoanForPayment(input.loanId);
 
     // Invariant §74.14: a settled loan does not keep taking money.
     if (!SERVICING.includes(loan.status)) {
@@ -175,7 +172,78 @@ export class PaymentService {
     const paidAt = input.paidAt ? new Date(input.paidAt) : this.clock.now();
     const sequence = (await this.db.payment.count()) + 1;
 
-    const payment = await this.db.$transaction(async (tx) => {
+    const payment = await this.runCreateTransaction({
+      loan,
+      amount,
+      allocation,
+      paidAt,
+      sequence,
+      input,
+      context,
+    });
+
+    return { payment, replayed: false };
+  }
+
+  private async loadLoanForPayment(loanId: string) {
+    const loan = await this.db.loan.findUnique({
+      where: { id: loanId },
+      include: { scheduleLines: { orderBy: { installmentNumber: "asc" } }, collectionCases: true },
+    });
+    if (!loan) throw new LoanNotFoundError(loanId);
+    return loan;
+  }
+
+  /**
+   * The write half of `create`, split out so a lost idempotency race can be
+   * answered with the winner's payment instead of a constraint error.
+   *
+   * The lookup in `create` is a fast path, not the guarantee: between that
+   * read and this write a concurrent request with the same key can commit
+   * first. `Payment.idempotencyKey` is unique, so the loser fails with P2002
+   * — one payment, one set of ledger entries — and the correct response is
+   * the payment that did get written, which is exactly what a retry asked for.
+   */
+  private async runCreateTransaction(args: {
+    loan: Awaited<ReturnType<PaymentService["loadLoanForPayment"]>>;
+    amount: Money;
+    allocation: ReturnType<typeof AllocationEngine.allocate>;
+    paidAt: Date;
+    sequence: number;
+    input: CreatePaymentInput;
+    context: AuditContext;
+  }) {
+    const { loan, amount, allocation, paidAt, sequence, input, context } = args;
+    try {
+      return await this.writePayment(loan, amount, allocation, paidAt, sequence, input, context);
+    } catch (error) {
+      if (isUniqueConstraintViolation(error, "idempotencyKey")) {
+        const winner = await this.db.payment.findUnique({
+          where: { idempotencyKey: input.idempotencyKey },
+          include: { allocations: true },
+        });
+        if (winner) return winner;
+      }
+      throw error;
+    }
+  }
+
+  private async writePayment(
+    loan: Awaited<ReturnType<PaymentService["loadLoanForPayment"]>>,
+    amount: Money,
+    allocation: ReturnType<typeof AllocationEngine.allocate>,
+    paidAt: Date,
+    sequence: number,
+    input: CreatePaymentInput,
+    context: AuditContext
+  ) {
+    const outstanding = {
+      interest: Money.fromMinorUnits(loan.outstandingInterestCents),
+      fees: Money.fromMinorUnits(loan.outstandingFeeCents),
+      principal: Money.fromMinorUnits(loan.outstandingPrincipalCents),
+    };
+
+    return await this.db.$transaction(async (tx) => {
       const created = await tx.payment.create({
         data: {
           paymentNumber: formatSequenceNumber("PMT", sequence),
@@ -260,8 +328,6 @@ export class PaymentService {
 
       return created;
     });
-
-    return { payment, replayed: false };
   }
 
   /**
@@ -276,8 +342,16 @@ export class PaymentService {
       include: { allocations: true, loan: true },
     });
     if (!payment) throw new InvalidPaymentError("Payment not found", { paymentId });
-    if (payment.status === "REVERSED") {
-      throw new InvalidPaymentError("Payment has already been reversed", { paymentId });
+    // Only a confirmed payment moved money, so only a confirmed payment has
+    // anything to compensate. This is the friendly error; the compare-and-set
+    // below is the guarantee.
+    if (payment.status !== "CONFIRMED") {
+      throw new InvalidPaymentError(
+        payment.status === "REVERSED"
+          ? "Payment has already been reversed"
+          : "Only a confirmed payment can be reversed",
+        { paymentId, status: payment.status }
+      );
     }
 
     const allocation = payment.allocations[0];
@@ -286,10 +360,19 @@ export class PaymentService {
     const occurredAt = this.clock.now();
 
     const reversed = await this.db.$transaction(async (tx) => {
-      const updated = await tx.payment.update({
-        where: { id: paymentId },
+      // Compare-and-set, not update-by-id. The status was read outside this
+      // transaction, so by now another reversal may already have run: an
+      // unconditional update would credit the borrower's balance back twice
+      // and post two compensating ledger entries for one payment. Only the
+      // caller that actually moves the row from CONFIRMED proceeds.
+      const claimed = await tx.payment.updateMany({
+        where: { id: paymentId, status: "CONFIRMED" },
         data: { status: "REVERSED" },
       });
+      if (claimed.count !== 1) {
+        throw new InvalidPaymentError("Payment is no longer reversible", { paymentId });
+      }
+      const updated = await tx.payment.findUniqueOrThrow({ where: { id: paymentId } });
 
       await tx.moneyEvent.create({
         data: {

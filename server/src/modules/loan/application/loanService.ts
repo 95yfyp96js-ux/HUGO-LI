@@ -166,9 +166,24 @@ export class LoanService {
   }
 
   /**
-   * Invariant §74.5: a loan is disbursed exactly once. The idempotency key is
-   * a unique column, so a concurrent duplicate fails at the database rather
-   * than relying on a read-then-write check.
+   * Invariant §74.5: a loan is disbursed exactly once, and money never leaves
+   * without a durable record that it did.
+   *
+   * The order below is deliberate and is the whole point of this method:
+   *
+   *   1. Claim the loan with an atomic compare-and-set. Only one caller can
+   *      move it out of APPROVED/READY_FOR_DISBURSEMENT, so a second request
+   *      — even with a different idempotency key — never reaches the provider.
+   *   2. Write the disbursement row as PENDING *before* calling the provider.
+   *      If the process dies mid-call, the PENDING row is the evidence that a
+   *      payout may be in flight and has to be reconciled. Calling first and
+   *      recording afterwards can lose money silently.
+   *   3. Call the provider.
+   *   4. Settle the row and post the ledger entries in one transaction.
+   *
+   * `completedForLoanId` is a unique column set only on success, so even if
+   * every check above were bypassed the database still refuses a second
+   * successful disbursement for the same loan.
    */
   async disburse(
     loanId: string,
@@ -203,31 +218,69 @@ export class LoanService {
       });
     }
 
+    // 1. Claim. A conditional update is atomic in a way that a read followed by
+    // a write is not: whoever changes the row from the pre-disbursement status
+    // wins, and every other caller sees count === 0 and stops here.
+    const claimed = await this.db.loan.updateMany({
+      where: { id: loanId, status: { in: ["APPROVED", "READY_FOR_DISBURSEMENT"] } },
+      data: { status: "DISBURSING" },
+    });
+    if (claimed.count !== 1) {
+      const current = await this.db.loan.findUniqueOrThrow({ where: { id: loanId } });
+      throw new InvalidLoanStateError(loanId, current.status, "DISBURSE");
+    }
+
+    const occurredAt = this.clock.now();
+    const sequence = (await this.db.disbursement.count()) + 1;
+
+    // 2. Record the intent before any money can move.
+    let pending;
+    try {
+      pending = await this.db.disbursement.create({
+        data: {
+          disbursementNumber: formatSequenceNumber("DSB", sequence),
+          loanId,
+          amountCents: amount.toMinorUnits(),
+          method: input.method ?? "BANK_TRANSFER",
+          status: "PENDING",
+          idempotencyKey: input.idempotencyKey,
+          processedBy: context.userId,
+        },
+      });
+    } catch (error) {
+      // Nothing has been sent yet, so releasing the claim is safe and leaves
+      // the loan disbursable again.
+      await this.releaseDisbursementClaim(loanId, loan.status as LoanStatus);
+      throw error;
+    }
+
+    // 3. Send.
+    //
+    // Deliberately not wrapped: if this throws we do not know whether money
+    // moved, so the disbursement row stays PENDING and the loan stays
+    // DISBURSING. That pair is the reconciliation queue, and it is also what
+    // stops anyone paying out again on top of an unresolved transfer.
     const providerResult = await this.disbursementProvider.send({
       loanNumber: loan.loanNumber,
       amount,
       method: input.method ?? "BANK_TRANSFER",
     });
 
-    const occurredAt = this.clock.now();
-    const sequence = (await this.db.disbursement.count()) + 1;
-
     const result = await this.db.$transaction(async (tx) => {
-      const disbursement = await tx.disbursement.create({
+      const disbursement = await tx.disbursement.update({
+        where: { id: pending.id },
         data: {
-          disbursementNumber: formatSequenceNumber("DSB", sequence),
-          loanId,
-          amountCents: amount.toMinorUnits(),
-          method: input.method ?? "BANK_TRANSFER",
           reference: providerResult.reference,
           status: providerResult.success ? "COMPLETED" : "FAILED",
-          idempotencyKey: input.idempotencyKey,
+          // Only a success takes the one slot this loan has.
+          completedForLoanId: providerResult.success ? loanId : null,
           processedAt: occurredAt,
-          processedBy: context.userId,
         },
       });
 
       if (!providerResult.success) {
+        // The provider declined, so no money moved: hand the loan back.
+        await tx.loan.update({ where: { id: loanId }, data: { status: loan.status } });
         return { disbursement, loanStatus: loan.status as LoanStatus };
       }
 
@@ -292,7 +345,7 @@ export class LoanService {
         });
       }
 
-      LoanStateMachine.assertTransition(loan.status as LoanStatus, "DISBURSED");
+      LoanStateMachine.assertTransition("DISBURSING", "DISBURSED");
       await tx.loan.update({ where: { id: loanId }, data: { status: "DISBURSED" } });
 
       LoanStateMachine.assertTransition("DISBURSED", "ACTIVE");
@@ -323,6 +376,18 @@ export class LoanService {
     });
 
     return { disbursement: result.disbursement, loan: await this.getById(loanId), replayed: false };
+  }
+
+  /**
+   * Hands a claimed loan back to its pre-disbursement status. Only safe to
+   * call when nothing was sent to the provider — once a payout may be in
+   * flight the loan must stay DISBURSING for reconciliation.
+   */
+  private async releaseDisbursementClaim(loanId: string, previous: LoanStatus) {
+    await this.db.loan.updateMany({
+      where: { id: loanId, status: "DISBURSING" },
+      data: { status: previous },
+    });
   }
 
   /**

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestEnv, ctx } from "../helpers/testEnv.js";
 import { originateLoan } from "../helpers/originate.js";
 import { Money } from "../../src/shared/money.js";
+import { randomUUID } from "node:crypto";
 
 /**
  * P2: a renewal is a new credit decision, not a copy of the old one.
@@ -29,7 +30,7 @@ describe("Renewal re-underwriting", () => {
 
     const { newLoan } = await env.container.renewals.renew(
       loanId,
-      { reason: "客戶申請續借" },
+      { idempotencyKey: randomUUID(), reason: "客戶申請續借" },
       manager()
     );
 
@@ -85,7 +86,7 @@ describe("Renewal re-underwriting", () => {
     });
     const originalEventsBefore = await env.db.moneyEvent.findMany({ where: { loanId } });
 
-    await env.container.renewals.renew(loanId, { reason: "續借" }, manager());
+    await env.container.renewals.renew(loanId, { idempotencyKey: randomUUID(), reason: "續借" }, manager());
 
     const originalApplicationAfter = await env.db.lendingApplication.findUniqueOrThrow({
       where: { id: applicationId },
@@ -128,7 +129,7 @@ describe("Renewal re-underwriting", () => {
     const overdue = await env.db.loan.findUniqueOrThrow({ where: { id: loanId } });
     expect(overdue.status).toBe("OVERDUE");
 
-    const { newLoan } = await env.container.renewals.renew(loanId, { reason: "逾期後續借" }, manager());
+    const { newLoan } = await env.container.renewals.renew(loanId, { idempotencyKey: randomUUID(), reason: "逾期後續借" }, manager());
 
     const renewalAssessment = await env.db.riskAssessment.findFirstOrThrow({
       where: { application: { loan: { id: newLoan.id } } },
@@ -158,7 +159,7 @@ describe("Renewal re-underwriting", () => {
       manager()
     );
 
-    const { newLoan } = await env.container.renewals.renew(loanId, { reason: "客戶要求續借" }, manager());
+    const { newLoan } = await env.container.renewals.renew(loanId, { idempotencyKey: randomUUID(), reason: "客戶要求續借" }, manager());
 
     const assessment = await env.db.riskAssessment.findFirstOrThrow({
       where: { application: { loan: { id: newLoan.id } } },
@@ -174,7 +175,7 @@ describe("Renewal re-underwriting", () => {
     await expect(
       env.container.renewals.renew(
         loanId,
-        { reason: "要求大額增貸", additionalAmount: 5_000_000 },
+        { idempotencyKey: randomUUID(), reason: "要求大額增貸", additionalAmount: 5_000_000 },
         manager()
       )
     ).rejects.toMatchObject({ code: "RENEWAL_NOT_PERMITTED" });
@@ -187,7 +188,7 @@ describe("Renewal re-underwriting", () => {
     env.clock.set(new Date("2026-05-01T09:00:00Z"));
     await env.container.loans.refreshDelinquency(loanId, manager());
 
-    const { newLoan } = await env.container.renewals.renew(loanId, { reason: "純展延" }, manager());
+    const { newLoan } = await env.container.renewals.renew(loanId, { idempotencyKey: randomUUID(), reason: "純展延" }, manager());
     expect(newLoan.status).toBe("ACTIVE");
   });
 
@@ -196,7 +197,7 @@ describe("Renewal re-underwriting", () => {
     // make every rollover look over-limit.
     const { loanId } = await originateLoan(env, { monthlyIncome: 100000, amount: 50000 });
 
-    const { newLoan } = await env.container.renewals.renew(loanId, { reason: "續借" }, manager());
+    const { newLoan } = await env.container.renewals.renew(loanId, { idempotencyKey: randomUUID(), reason: "續借" }, manager());
 
     const limit = await env.db.lendingLimit.findFirstOrThrow({
       where: { application: { loan: { id: newLoan.id } } },
@@ -209,7 +210,7 @@ describe("Renewal re-underwriting", () => {
 
   it("records the underwriting outcome in the audit trail", async () => {
     const { loanId } = await originateLoan(env);
-    const { renewal } = await env.container.renewals.renew(loanId, { reason: "續借" }, manager());
+    const { renewal } = await env.container.renewals.renew(loanId, { idempotencyKey: randomUUID(), reason: "續借" }, manager());
 
     const entry = await env.db.auditLog.findFirstOrThrow({
       where: { action: "RENEWAL_CREATED", resourceId: renewal.id },
@@ -240,7 +241,7 @@ describe("Renewal re-underwriting", () => {
 
   it("makes renewed loans appear with a risk grade in the portfolio breakdown", async () => {
     const { loanId } = await originateLoan(env);
-    await env.container.renewals.renew(loanId, { reason: "續借" }, manager());
+    await env.container.renewals.renew(loanId, { idempotencyKey: randomUUID(), reason: "續借" }, manager());
 
     const breakdown = await env.container.portfolio.byRiskGrade();
     const ungraded = breakdown.find((b) => b.grade === "UNGRADED");
@@ -257,7 +258,7 @@ describe("Renewal re-underwriting", () => {
       before.outstandingPrincipalCents + before.outstandingInterestCents + before.outstandingFeeCents
     );
 
-    const { newLoan } = await env.container.renewals.renew(loanId, { reason: "續借" }, manager());
+    const { newLoan } = await env.container.renewals.renew(loanId, { idempotencyKey: randomUUID(), reason: "續借" }, manager());
 
     expect(Money.fromMinorUnits(newLoan.principalCents).equals(carried)).toBe(true);
     const closed = await env.db.loan.findUniqueOrThrow({ where: { id: loanId } });

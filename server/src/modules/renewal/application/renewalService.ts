@@ -18,13 +18,14 @@ export interface RenewInput {
   additionalAmount?: string | number;
   termMonths?: number;
   reason: string;
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }
 
 export interface ExtendInput {
   extensionMonths: number;
   fee?: string | number;
   reason: string;
+  idempotencyKey: string;
 }
 
 /**
@@ -43,6 +44,17 @@ export class RenewalService {
 
   async renew(loanId: string, input: RenewInput, context: AuditContext) {
     if (!input.reason?.trim()) throw new ValidationError("A renewal reason is required");
+    if (!input.idempotencyKey) {
+      throw new ValidationError("Idempotency-Key is required to renew a loan");
+    }
+
+    // A renewal writes a new loan carrying the old balance forward, so a
+    // retried request used to lend the same money twice. The key is stored on
+    // the Renewal row under a unique index, which is what actually prevents
+    // it; this lookup just turns the second attempt into a replay instead of
+    // a constraint error.
+    const replayed = await this.replayRenewal(input.idempotencyKey);
+    if (replayed) return replayed;
 
     const previous = await this.db.loan.findUnique({
       where: { id: loanId },
@@ -285,9 +297,17 @@ export class RenewalService {
 
       // Old loan closes as RESTRUCTURED — a terminal state, so its history
       // can never be modified again.
+      //
+      // Conditional on the status this renewal was underwritten against, not
+      // an unconditional update by id. `previous.status` was read before any
+      // of the underwriting above, so by now a concurrent renewal of the same
+      // loan may already have closed it — and that renewal carried the same
+      // balance forward. Without this, both commit and the customer owes the
+      // same money on two new loans. Two concurrent renewals happened to
+      // collide on a unique loan number instead, which is luck, not a rule.
       LoanStateMachine.assertTransition(previous.status as LoanStatus, "RESTRUCTURED");
-      await tx.loan.update({
-        where: { id: previous.id },
+      const closed = await tx.loan.updateMany({
+        where: { id: previous.id, status: previous.status },
         data: {
           status: "RESTRUCTURED",
           outstandingPrincipalCents: 0,
@@ -295,9 +315,13 @@ export class RenewalService {
           outstandingFeeCents: 0,
         },
       });
+      if (closed.count !== 1) {
+        throw new InvalidLoanStateError(previous.id, previous.status, "RENEW");
+      }
 
       const renewal = await tx.renewal.create({
         data: {
+          idempotencyKey: input.idempotencyKey,
           originalLoanId,
           previousLoanId: previous.id,
           newLoanId: newLoan.id,
@@ -342,12 +366,39 @@ export class RenewalService {
       return { renewal, newLoan };
     });
 
-    return result;
+    return { ...result, replayed: false };
+  }
+
+  /**
+   * Returns the original outcome of a renewal that already ran under this
+   * key, so a retry is answered rather than refused.
+   */
+  private async replayRenewal(idempotencyKey: string) {
+    const existing = await this.db.renewal.findUnique({
+      where: { idempotencyKey },
+      include: { newLoan: true },
+    });
+    if (!existing) return null;
+    const { newLoan, ...renewal } = existing;
+    return { renewal, newLoan, replayed: true as const };
   }
 
   async extend(loanId: string, input: ExtendInput, context: AuditContext) {
     if (!input.reason?.trim()) throw new ValidationError("An extension reason is required");
     if (input.extensionMonths <= 0) throw new ValidationError("extensionMonths must be positive");
+    if (!input.idempotencyKey) {
+      throw new ValidationError("Idempotency-Key is required to extend a loan");
+    }
+
+    // Without this a retry charged the extension fee again and pushed the
+    // maturity date out a second time.
+    const existing = await this.db.extension.findUnique({
+      where: { idempotencyKey: input.idempotencyKey },
+    });
+    if (existing) {
+      const loan = await this.db.loan.findUniqueOrThrow({ where: { id: existing.loanId } });
+      return { extension: existing, loan, replayed: true as const };
+    }
 
     const loan = await this.db.loan.findUnique({
       where: { id: loanId },
@@ -367,6 +418,7 @@ export class RenewalService {
     const result = await this.db.$transaction(async (tx) => {
       const extension = await tx.extension.create({
         data: {
+          idempotencyKey: input.idempotencyKey,
           loanId,
           previousMaturityDate: previousMaturity,
           newMaturityDate: newMaturity,
@@ -433,7 +485,7 @@ export class RenewalService {
       return { extension, loan: updatedLoan };
     });
 
-    return result;
+    return { ...result, replayed: false };
   }
 
   /** Walks the full renewal chain for any loan in it (§29 LoanChainService). */

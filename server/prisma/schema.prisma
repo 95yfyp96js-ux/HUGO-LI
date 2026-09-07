@@ -355,6 +355,13 @@ model Disbursement {
   reference          String?
   status             String    @default("PENDING") // PENDING | PROCESSING | COMPLETED | FAILED | CANCELLED
   idempotencyKey     String    @unique
+  // Invariant §74.5, enforced by the database rather than by a status check.
+  // Set to the loan id only while this disbursement is COMPLETED, and left
+  // null otherwise, so a loan can have any number of FAILED attempts but the
+  // second *successful* one is refused by this unique index. The status check
+  // alone could not do that: two requests with different idempotency keys both
+  // read the same pre-disbursement status and both paid out.
+  completedForLoanId String?   @unique
   processedAt        DateTime?
   processedBy        String?
   createdAt          DateTime  @default(now())
@@ -502,6 +509,10 @@ model PromiseToPay {
 
 model Renewal {
   id             String   @id @default(uuid())
+  // Without this a retried renew request created a second loan carrying the
+  // same balance forward — duplicate lending. Nullable so historical rows
+  // remain valid; enforced for every new renewal by the service.
+  idempotencyKey String?  @unique
   originalLoanId String
   originalLoan   Loan     @relation("RenewalOriginal", fields: [originalLoanId], references: [id])
   previousLoanId String
@@ -517,6 +528,7 @@ model Renewal {
 
 model Extension {
   id                  String   @id @default(uuid())
+  idempotencyKey      String?  @unique
   loanId              String
   loan                Loan     @relation(fields: [loanId], references: [id])
   previousMaturityDate DateTime
@@ -590,6 +602,9 @@ model AuditLog {
 model IdempotencyRecord {
   key          String   @id
   endpoint     String
+  /** Hash of the request body, so the same key with different content is refused. */
+  fingerprint  String   @default("")
+  statusCode   Int      @default(200)
   responseBody String
   createdAt    DateTime @default(now())
 }

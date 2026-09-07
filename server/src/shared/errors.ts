@@ -149,3 +149,22 @@ export class LoanLimitExceededError extends DomainError {
     });
   }
 }
+
+/**
+ * True when Prisma refused a write because a unique index already held the
+ * value — the signal that a concurrent request won an idempotency race.
+ *
+ * Matched structurally rather than with `instanceof`, because the error class
+ * comes from the generated client and the check should not depend on which
+ * copy of it is loaded.
+ */
+export function isUniqueConstraintViolation(error: unknown, field?: string): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { code?: unknown; meta?: { target?: unknown } };
+  if (candidate.code !== "P2002") return false;
+  if (!field) return true;
+  const target = candidate.meta?.target;
+  const fields = Array.isArray(target) ? target.map(String) : typeof target === "string" ? [target] : [];
+  // Some connectors report the index name rather than the column list.
+  return fields.some((name) => name === field || name.includes(field));
+}

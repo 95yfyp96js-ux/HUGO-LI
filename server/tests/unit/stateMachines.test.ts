@@ -38,8 +38,26 @@ describe("LoanStateMachine", () => {
   it("walks the origination path through to ACTIVE", () => {
     expect(LoanStateMachine.canTransition("CREATED", "APPROVED")).toBe(true);
     expect(LoanStateMachine.canTransition("APPROVED", "READY_FOR_DISBURSEMENT")).toBe(true);
-    expect(LoanStateMachine.canTransition("READY_FOR_DISBURSEMENT", "DISBURSED")).toBe(true);
+    // DISBURSING sits between "ready" and "disbursed": it is the claim a
+    // caller takes before contacting the payout provider, so that a loan with
+    // a payout possibly in flight is a state the database can hold.
+    expect(LoanStateMachine.canTransition("READY_FOR_DISBURSEMENT", "DISBURSING")).toBe(true);
+    expect(LoanStateMachine.canTransition("DISBURSING", "DISBURSED")).toBe(true);
     expect(LoanStateMachine.canTransition("DISBURSED", "ACTIVE")).toBe(true);
+  });
+
+  it("does not let a loan skip the disbursing claim", () => {
+    // Skipping straight to DISBURSED would mean money moved without anyone
+    // having taken the claim that keeps a second payout out.
+    expect(LoanStateMachine.canTransition("READY_FOR_DISBURSEMENT", "DISBURSED")).toBe(false);
+    expect(LoanStateMachine.canTransition("APPROVED", "DISBURSED")).toBe(false);
+  });
+
+  it("returns a claimed loan to its pre-disbursement status when the provider declines", () => {
+    expect(LoanStateMachine.canTransition("DISBURSING", "READY_FOR_DISBURSEMENT")).toBe(true);
+    expect(LoanStateMachine.canTransition("DISBURSING", "APPROVED")).toBe(true);
+    // But it can never jump straight into servicing without being disbursed.
+    expect(LoanStateMachine.canTransition("DISBURSING", "ACTIVE")).toBe(false);
   });
 
   it("refuses to disburse a loan that is not ready", () => {

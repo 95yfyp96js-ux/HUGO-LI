@@ -289,3 +289,131 @@ in `localStorage`, which is XSS-exposed; httpOnly cookies with CSRF
 protection would be the hardening step.
 
 **Date.** 2026-09-07
+
+---
+
+## 12. A renewal is underwritten against its own exposure, not the loan it replaces
+
+**Context.** Renewal now re-runs risk, limit and pricing (V1.1 P2). The
+customer's exposure includes the very loan being renewed, so a naive limit
+check counts the balance twice — once as existing debt and once as the
+principal being requested — and refuses almost every renewal.
+
+**Chosen.** `RiskService.currentExposure` and `calculateLimit` take an
+`excludeLoanId`, and renewal passes the loan it is replacing.
+
+**Reason.** The loan is not additional exposure; it is the exposure being
+restructured. Excluding it measures what the customer will actually owe
+after the renewal, which is the number the limit is about.
+
+**Trade-offs.** The caller decides what to exclude, so a wrong caller
+understates exposure. Confined to renewal, where the exclusion is provably
+the loan being closed in the same transaction.
+
+**Date.** 2026-09-07
+
+---
+
+## 13. Product amount bounds constrain new money, not the carried balance
+
+**Context.** Pricing a renewal failed with `PRICING_UNAVAILABLE` whenever the
+carried balance plus new advance exceeded the product maximum — including
+renewals that advanced nothing.
+
+**Chosen.** `PricingInput.carriedAmount`. With no carried amount the whole
+principal must sit inside the product's range; with one, only the new money
+is bound. Term bounds always apply.
+
+**Reason.** Product limits express how much *new* credit may be extended.
+A balance already lent has already passed that test; re-applying it would
+make a loan unrenewable purely because it exists.
+
+**Trade-offs.** A long renewal chain can carry a balance above the product
+maximum. That is what the limit engine and risk grade are for, and the
+renewal is refused there instead — a credit decision rather than a
+configuration accident.
+
+**Date.** 2026-09-07
+
+---
+
+## 14. PostgreSQL search is case-sensitive; the fix waits for migration
+
+**Context.** The empirical PostgreSQL audit (V1.1 P5) found that customer
+search silently returns nothing for Latin-script names on PostgreSQL, because
+SQLite's `LIKE` is case-insensitive and PostgreSQL's is not.
+
+**Chosen.** Documented in `docs/postgres-readiness.md` as a migration
+blocker with a preferred remedy (`citext` or a `lower()` functional index),
+and left unfixed for now.
+
+**Reason.** Prisma's `mode: "insensitive"` is unsupported on the SQLite
+connector, so adopting it would break local development and the entire test
+suite. The alternatives are schema changes whose value lands only at
+migration time, and applying them blind is what the audit existed to prevent.
+
+**Trade-offs.** The defect is real and shipped. It is inert on SQLite, so it
+cannot bite before the migration it is documented against.
+
+**Date.** 2026-09-07
+
+---
+
+## 15. Money-moving operations are guarded by conditional writes, not read-then-write
+
+**Context.** The V1.1 P6 audit found three operations deciding whether to act
+from a value read outside the transaction that then acted on it: disbursement
+(loan status), reversal (payment status), and renewal (previous loan status).
+Each is a lost-update race. Concurrent renewals were in fact being stopped by
+a unique loan-number collision — an accident, not a rule.
+
+**Chosen.** Every such decision is now a conditional `updateMany` whose
+`where` clause names the state it was decided against, with the affected count
+asserted. Disbursement additionally records a PENDING row *before* contacting
+the payout provider, and carries a `completedForLoanId` unique column so the
+database itself refuses a second successful payout per loan.
+
+**Reason.** A financial guarantee has to live where the write happens. The
+ordering matters as much as the condition: a provider called before anything
+durable is recorded can move money that no row accounts for, so intent is
+written first and the loan is parked in `DISBURSING` until the outcome is
+known.
+
+**Trade-offs.** A crash between the provider call and the settling
+transaction leaves a loan stuck in `DISBURSING` with a PENDING disbursement.
+That is deliberate — it is a reconciliation queue rather than a silent loss —
+but it needs an operator to resolve, and no tooling for that ships in V1.1.
+Sequence numbers are still `count() + 1`, so a concurrent pair can collide on
+a unique number and one request fails; it is safe (nothing is written twice)
+but it surfaces as an error rather than a retry.
+
+**Date.** 2026-09-07
+
+---
+
+## 16. The Idempotency-Key middleware refuses reuse but never answers a retry
+
+**Context.** V1.1 P6 requires that the same key with a different payload be
+rejected. The obvious implementation — cache the response and replay it —
+was written first and broke a passing test.
+
+**Chosen.** `IdempotencyGuard` stores only a fingerprint of method, endpoint
+and canonicalised body. A mismatch is refused with `IDEMPOTENCY_KEY_REUSED`;
+a match falls through to the service, which does the replay.
+
+**Reason.** Each service already returns its original result with an accurate
+`replayed` flag, computed from the row it actually wrote. A cached response
+would have served a body whose `replayed: false` had since become a lie, and
+would have reported the original HTTP status for a request that did no work.
+Caching bodies would also mean a second store of customer data and amounts
+that nothing reads.
+
+**Trade-offs.** The middleware is a payload guard only. It does not make a
+non-idempotent endpoint idempotent — the unique columns on Payment,
+Disbursement, Renewal and Extension do that — so any new money-moving
+endpoint still needs its own constraint. The `IdempotencyRecord` table's
+`responseBody` and `statusCode` columns are consequently unused; they are
+left in place because dropping columns is a destructive migration for no
+benefit.
+
+**Date.** 2026-09-07

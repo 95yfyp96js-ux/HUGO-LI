@@ -17,6 +17,7 @@ import {
   createRateLimiter,
   type RateLimitSettings,
 } from "./rateLimit.js";
+import { IdempotencyGuard } from "./idempotency.js";
 
 const num = (value: unknown, fallback?: number): number | undefined => {
   if (value === undefined || value === "") return fallback;
@@ -45,6 +46,10 @@ export function createRoutes(
     keyFn: byUser,
     clock: container.clock,
   });
+  // Refuses an Idempotency-Key reused for a different request, and replays a
+  // stored response for an identical one. The unique columns on the financial
+  // tables remain the actual guarantee; this catches the case they cannot see.
+  const idempotency = new IdempotencyGuard(container.db);
   const adminLimit = createRateLimiter({
     ...rateLimits.admin,
     name: "admin",
@@ -332,6 +337,7 @@ export function createRoutes(
   router.post(
     "/loans/:id/disburse",
     financialLimit.middleware,
+    idempotency.middleware,
     requirePermission("LOAN_DISBURSE"),
     asyncHandler(async (req, res) => {
       const idempotencyKey = requireIdempotencyKey(req);
@@ -347,19 +353,32 @@ export function createRoutes(
   router.post(
     "/loans/:id/renew",
     financialLimit.middleware,
+    idempotency.middleware,
     requirePermission("LOAN_RENEW"),
     asyncHandler(async (req, res) => {
-      requireIdempotencyKey(req);
-      res.status(201).json(await container.renewals.renew(req.params.id!, req.body, auditContext(req)));
+      const idempotencyKey = requireIdempotencyKey(req);
+      const result = await container.renewals.renew(
+        req.params.id!,
+        { ...req.body, idempotencyKey },
+        auditContext(req)
+      );
+      res.status(result.replayed ? 200 : 201).json(result);
     })
   );
 
   router.post(
     "/loans/:id/extend",
     financialLimit.middleware,
+    idempotency.middleware,
     requirePermission("LOAN_EXTEND"),
     asyncHandler(async (req, res) => {
-      res.status(201).json(await container.renewals.extend(req.params.id!, req.body, auditContext(req)));
+      const idempotencyKey = requireIdempotencyKey(req);
+      const result = await container.renewals.extend(
+        req.params.id!,
+        { ...req.body, idempotencyKey },
+        auditContext(req)
+      );
+      res.status(result.replayed ? 200 : 201).json(result);
     })
   );
 
@@ -375,6 +394,7 @@ export function createRoutes(
   router.post(
     "/loans/:id/settle",
     financialLimit.middleware,
+    idempotency.middleware,
     requirePermission("LOAN_SETTLE"),
     asyncHandler(async (req, res) => {
       const idempotencyKey = requireIdempotencyKey(req);
@@ -435,6 +455,7 @@ export function createRoutes(
   router.post(
     "/payments",
     financialLimit.middleware,
+    idempotency.middleware,
     requirePermission("PAYMENT_CREATE"),
     asyncHandler(async (req, res) => {
       const idempotencyKey = requireIdempotencyKey(req);

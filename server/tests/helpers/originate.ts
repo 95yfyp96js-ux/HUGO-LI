@@ -19,6 +19,8 @@ export async function originateLoan(
     name?: string;
     identityNumber?: string;
     customerId?: string;
+    /** Stops just short of disbursement, for tests that drive it themselves. */
+    skipDisbursement?: boolean;
   } = {}
 ) {
   const customerId =
@@ -61,11 +63,13 @@ export async function originateLoan(
     application.id,
     ctx(env.users.userIds.MANAGER!)
   );
-  await env.container.loans.disburse(
-    loan.id,
-    { idempotencyKey: `disburse-${loan.id}` },
-    ctx(env.users.userIds.MANAGER!)
-  );
+  if (!options.skipDisbursement) {
+    await env.container.loans.disburse(
+      loan.id,
+      { idempotencyKey: `disburse-${loan.id}` },
+      ctx(env.users.userIds.MANAGER!)
+    );
+  }
 
   return {
     customerId,

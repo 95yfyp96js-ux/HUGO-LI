@@ -16,6 +16,7 @@ import { MockClock } from "../src/shared/clock.js";
 import { hashPassword } from "../src/modules/auth/infrastructure/password.js";
 import { ROLE_PERMISSIONS, PERMISSIONS, type RoleCode } from "../src/modules/auth/domain/permissions.js";
 import { Money } from "../src/shared/money.js";
+import { randomUUID } from "node:crypto";
 
 const prisma = new PrismaClient();
 
@@ -420,7 +421,12 @@ async function main() {
   for (const loan of extendable) {
     await container.renewals.extend(
       loan.id,
-      { extensionMonths: 1, fee: 500, reason: "客戶短期資金困難，同意展延一個月" },
+      {
+        idempotencyKey: randomUUID(),
+        extensionMonths: 1,
+        fee: 500,
+        reason: "客戶短期資金困難，同意展延一個月",
+      },
       managerContext
     );
   }

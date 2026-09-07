@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import request from "supertest";
 import { createTestEnv, ctx, TEST_PASSWORD } from "../helpers/testEnv.js";
 import { Money } from "../../src/shared/money.js";
+import { randomUUID } from "node:crypto";
 
 /** Drives an application all the way to a live, disbursed loan. */
 async function originateLoan(
@@ -98,7 +99,7 @@ describe("Domain invariants", () => {
 
     const { renewal, newLoan } = await env.container.renewals.renew(
       loanId,
-      { reason: "客戶申請續借", termMonths: 3 },
+      { idempotencyKey: randomUUID(), reason: "客戶申請續借", termMonths: 3 },
       ctx(env.users.userIds.MANAGER!)
     );
 
@@ -136,12 +137,12 @@ describe("Domain invariants", () => {
 
     const first = await env.container.renewals.renew(
       loanId,
-      { reason: "第一次續借" },
+      { idempotencyKey: randomUUID(), reason: "第一次續借" },
       ctx(env.users.userIds.MANAGER!)
     );
     const second = await env.container.renewals.renew(
       first.newLoan.id,
-      { reason: "第二次續借" },
+      { idempotencyKey: randomUUID(), reason: "第二次續借" },
       ctx(env.users.userIds.MANAGER!)
     );
 

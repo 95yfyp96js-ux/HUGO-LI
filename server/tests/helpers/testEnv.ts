@@ -17,7 +17,10 @@ export const TEST_PASSWORD = "TestPassword123!";
  */
 export async function createTestEnv(
   startDate = new Date("2026-01-01T09:00:00Z"),
-  options: { rateLimits?: AppOptions["rateLimits"] } = {}
+  options: {
+    rateLimits?: AppOptions["rateLimits"];
+    disbursementProvider?: AppOptions["disbursementProvider"];
+  } = {}
 ) {
   const dir = mkdtempSync(join(tmpdir(), "lending-test-"));
   const dbPath = join(dir, "test.db");
@@ -35,6 +38,7 @@ export async function createTestEnv(
     db,
     clock,
     jwtSecret: "test-secret",
+    disbursementProvider: options.disbursementProvider,
     // Generous by default so unrelated tests are never throttled; the
     // rate-limit tests pass tight values of their own.
     rateLimits: options.rateLimits ?? {
