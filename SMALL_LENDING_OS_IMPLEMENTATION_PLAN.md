@@ -36,20 +36,24 @@ running.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Repository analysis | DONE |
-| 1 | Architecture + domain foundation (Money, Clock, Errors, base kernel) | IN PROGRESS |
-| 2 | Database schema + repositories | PENDING |
-| 3 | Customer + Application (state machine) | PENDING |
-| 4 | Risk + Pricing engines | PENDING |
-| 5 | Loan + Snapshot | PENDING |
-| 6 | Interest + Repayment + Payment engines | PENDING |
-| 7 | Overdue + Collection | PENDING |
-| 8 | Renewal + Portfolio | PENDING |
-| 9 | API | PENDING |
-| 10 | Desktop UI | PENDING |
-| 11 | Mobile UI (quick actions) | PENDING |
-| 12 | RBAC + Audit | PENDING (woven in from Phase 2 onward, not bolted on at the end) |
-| 13 | Testing | PENDING (unit tests written alongside each engine, not deferred) |
-| 14 | Final QA + completion report | PENDING |
+| 1 | Architecture + domain foundation | DONE |
+| 2 | Database schema + repositories | DONE |
+| 3 | Customer + Customer 360 | DONE |
+| 4 | Lending application + state machine | DONE |
+| 5 | Risk + lending limit | DONE |
+| 6 | Pricing + loan offer | DONE |
+| 7 | Approval + loan creation + snapshot | DONE |
+| 8 | Disbursement | DONE (mock provider) |
+| 9 | Interest + schedule | DONE (simple interest) |
+| 10 | Payment + repayment + balance | DONE |
+| 11 | Overdue + collection | DONE |
+| 12 | Renewal + extension + settlement | DONE |
+| 13 | Portfolio + dashboard | DONE |
+| 14 | Desktop UI | DONE |
+| 15 | Mobile UI | DONE |
+| 16 | RBAC + audit + security | DONE |
+| 17 | Full test suite | DONE (116 + 14 E2E) |
+| 18 | Final QA + completion report | DONE |
 
 Status is updated at the end of each phase in this file and reported in chat
 per the phase-gate format (§49).
