@@ -102,6 +102,16 @@ export class DuplicatePaymentError extends DomainError {
   }
 }
 
+/**
+ * Raised at startup when the process is misconfigured. It never carries the
+ * offending value — only the variable and the reason.
+ */
+export class ConfigurationError extends DomainError {
+  constructor(message: string, details: Record<string, unknown> = {}) {
+    super("CONFIGURATION_ERROR", message, 500, details);
+  }
+}
+
 export class ValidationError extends DomainError {
   constructor(message: string, details: Record<string, unknown> = {}) {
     super("VALIDATION_ERROR", message, 400, details);

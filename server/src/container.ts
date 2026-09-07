@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { prisma as defaultPrisma } from "./infrastructure/prisma.js";
 import { SystemClock, type Clock } from "./shared/clock.js";
+import { resolveJwtSecret } from "./config/security.js";
 import { AuditService } from "./modules/audit/application/auditService.js";
 import { CustomerService } from "./modules/customer/application/customerService.js";
 import { Customer360Service } from "./modules/customer/application/customer360Service.js";
@@ -57,7 +58,8 @@ export interface ContainerOptions {
 export function createContainer(options: ContainerOptions = {}): Container {
   const db = options.db ?? defaultPrisma;
   const clock = options.clock ?? new SystemClock();
-  const jwtSecret = options.jwtSecret ?? process.env.JWT_SECRET ?? "dev-only-insecure-secret";
+  // Fails fast in production rather than falling back to a shipped default.
+  const jwtSecret = resolveJwtSecret({ explicit: options.jwtSecret });
   const disbursementProvider = options.disbursementProvider ?? new MockDisbursementProvider();
   const identityScanner = options.identityScanner ?? new MockIdentityScanner();
 
