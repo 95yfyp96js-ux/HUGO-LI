@@ -1,0 +1,189 @@
+import { useState } from "react";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { useAuth } from "../lib/auth";
+import { IS_SNAPSHOT } from "../lib/snapshot";
+
+interface NavItem {
+  to: string;
+  label: string;
+  icon: string;
+  permission?: string;
+}
+
+const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
+  {
+    title: "營運",
+    items: [
+      { to: "/dashboard", label: "營運總覽", icon: "▤", permission: "LOAN_READ" },
+      { to: "/quick-actions", label: "快速作業", icon: "⚡" },
+    ],
+  },
+  {
+    title: "放款",
+    items: [
+      { to: "/customers", label: "客戶", icon: "👤", permission: "CUSTOMER_READ" },
+      { to: "/lending/applications", label: "放款申請", icon: "📄", permission: "APPLICATION_READ" },
+      { to: "/loans", label: "放款帳戶", icon: "💰", permission: "LOAN_READ" },
+      { to: "/loans/pending-disbursement", label: "待撥款", icon: "🏦", permission: "LOAN_READ" },
+      { to: "/loans/overdue", label: "逾期管理", icon: "⚠️", permission: "LOAN_READ" },
+    ],
+  },
+  {
+    title: "帳務",
+    items: [
+      { to: "/payments", label: "收款紀錄", icon: "🧾", permission: "PAYMENT_READ" },
+      { to: "/collections", label: "催收", icon: "📞", permission: "COLLECTION_READ" },
+      { to: "/renewals", label: "續借紀錄", icon: "🔁", permission: "LOAN_READ" },
+      { to: "/reports", label: "報表", icon: "📊", permission: "LOAN_READ" },
+    ],
+  },
+  {
+    title: "設定",
+    items: [
+      { to: "/products", label: "放款產品", icon: "📦", permission: "PRODUCT_READ" },
+      { to: "/settings/users", label: "使用者", icon: "🔑", permission: "USER_MANAGE" },
+      { to: "/settings/roles", label: "角色權限", icon: "🛡", permission: "USER_MANAGE" },
+      { to: "/settings/audit-logs", label: "操作紀錄", icon: "📋", permission: "AUDIT_READ" },
+    ],
+  },
+];
+
+// The four operations that matter on a phone (§44).
+const MOBILE_NAV: NavItem[] = [
+  { to: "/dashboard", label: "總覽", icon: "▤" },
+  { to: "/loans", label: "放款", icon: "💰" },
+  { to: "/quick-actions", label: "快速", icon: "⚡" },
+  { to: "/collections", label: "催收", icon: "📞" },
+];
+
+export function Layout() {
+  const { user, logout, can } = useAuth();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const location = useLocation();
+
+  const visible = (item: NavItem) => !item.permission || can(item.permission);
+
+  return (
+    <div className="min-h-screen lg:flex">
+      {/* Desktop sidebar */}
+      <aside className="hidden w-64 shrink-0 border-r border-slate-200 bg-white lg:block">
+        <div className="flex h-16 items-center gap-2 border-b border-slate-200 px-5">
+          <span className="text-lg font-bold text-brand-700">Small Lending OS</span>
+        </div>
+        <nav className="space-y-6 p-4">
+          {NAV_SECTIONS.map((section) => {
+            const items = section.items.filter(visible);
+            if (items.length === 0) return null;
+            return (
+              <div key={section.title}>
+                <div className="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  {section.title}
+                </div>
+                <div className="space-y-0.5">
+                  {items.map((item) => (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      end={item.to === "/loans"}
+                      className={({ isActive }) =>
+                        `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                          isActive
+                            ? "bg-brand-50 text-brand-700"
+                            : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                        }`
+                      }
+                    >
+                      <span className="w-5 text-center">{item.icon}</span>
+                      {item.label}
+                    </NavLink>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </nav>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 lg:px-8">
+          <button
+            className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 lg:hidden"
+            onClick={() => setMenuOpen((open) => !open)}
+            aria-label="開啟選單"
+          >
+            ☰
+          </button>
+          <span className="font-semibold text-brand-700 lg:hidden">Small Lending OS</span>
+
+          <div className="flex items-center gap-3">
+            <div className="hidden text-right sm:block">
+              <div className="text-sm font-medium text-slate-900">{user?.displayName}</div>
+              <div className="text-xs text-slate-500">{user?.roles.join(", ")}</div>
+            </div>
+            {!IS_SNAPSHOT && (
+              <button onClick={logout} className="btn-secondary text-xs">
+                登出
+              </button>
+            )}
+          </div>
+        </header>
+
+        {/* Mobile drawer */}
+        {menuOpen && (
+          <div className="border-b border-slate-200 bg-white p-4 lg:hidden">
+            {NAV_SECTIONS.flatMap((section) => section.items)
+              .filter(visible)
+              .map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  onClick={() => setMenuOpen(false)}
+                  className={({ isActive }) =>
+                    `touch-target flex items-center gap-3 rounded-lg px-3 text-sm font-medium ${
+                      isActive ? "bg-brand-50 text-brand-700" : "text-slate-700"
+                    }`
+                  }
+                >
+                  <span className="w-5 text-center">{item.icon}</span>
+                  {item.label}
+                </NavLink>
+              ))}
+          </div>
+        )}
+
+        {IS_SNAPSHOT && (
+          <div className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900 lg:px-8">
+            <span className="font-semibold">唯讀展示版本。</span>
+            畫面上的金額、利率、期程與 KPI 都是後端引擎實際計算後匯出的快照，
+            但新增、審核、撥款、收款等寫入操作在此版本無法執行。完整可操作系統請在本機執行
+            <code className="mx-1 rounded bg-amber-100 px-1 py-0.5">npm run dev:server</code>與
+            <code className="mx-1 rounded bg-amber-100 px-1 py-0.5">npm run dev:web</code>。
+          </div>
+        )}
+
+        <main className="flex-1 p-4 pb-24 lg:p-8 lg:pb-8">
+          <Outlet key={location.pathname} />
+        </main>
+
+        {/* Mobile bottom navigation */}
+        <nav className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-4 border-t border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] lg:hidden">
+          {MOBILE_NAV.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === "/loans"}
+              className={({ isActive }) =>
+                `touch-target flex flex-col items-center justify-center gap-1 text-xs font-medium ${
+                  isActive ? "text-brand-700" : "text-slate-500"
+                }`
+              }
+            >
+              <span className="text-lg">{item.icon}</span>
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+      </div>
+    </div>
+  );
+}
