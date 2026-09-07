@@ -13,6 +13,8 @@ export interface CreateOfferInput {
   termMonths: number;
   riskGrade: RiskGrade;
   collateralValue?: Money | null;
+  /** Balance rolled over from an existing loan on the same product. */
+  carriedAmount?: Money | null;
 }
 
 export class PricingService {
@@ -35,6 +37,7 @@ export class PricingService {
       termMonths: input.termMonths,
       riskGrade: input.riskGrade,
       collateralValue: input.collateralValue ?? null,
+      carriedAmount: input.carriedAmount ?? null,
       product: {
         id: product.id,
         ratePercent: product.ratePercent,

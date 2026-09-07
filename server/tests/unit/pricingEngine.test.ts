@@ -91,4 +91,72 @@ describe("PricingEngine", () => {
   it("refuses a non-positive amount", () => {
     expect(() => PricingEngine.priceOffer({ ...base, approvedAmount: Money.zero() })).toThrow(/positive/);
   });
+
+  describe("rollovers", () => {
+    // A renewal carries a balance that was already lent under this product.
+    // Principal plus accrued interest can exceed the product maximum, and
+    // refusing to price it would strand the borrower on a debt they owe.
+    it("prices a carried balance above the product maximum", () => {
+      const carried = m(600000); // product max is 500,000
+      const offer = PricingEngine.priceOffer({
+        ...base,
+        approvedAmount: carried,
+        carriedAmount: carried,
+      });
+      expect(offer.approvedAmount.equals(carried)).toBe(true);
+    });
+
+    it("prices a carried balance below the product minimum", () => {
+      const carried = m(2000); // product min is 10,000
+      const offer = PricingEngine.priceOffer({
+        ...base,
+        approvedAmount: carried,
+        carriedAmount: carried,
+      });
+      expect(offer.approvedAmount.equals(carried)).toBe(true);
+    });
+
+    it("still holds new money advanced on top to the product maximum", () => {
+      expect(() =>
+        PricingEngine.priceOffer({
+          ...base,
+          approvedAmount: m(600000).add(m(600000)),
+          carriedAmount: m(600000),
+        })
+      ).toThrow(/additional advance is above the product maximum/);
+    });
+
+    it("allows an additional advance inside the product maximum", () => {
+      const offer = PricingEngine.priceOffer({
+        ...base,
+        approvedAmount: m(600000).add(m(20000)),
+        carriedAmount: m(600000),
+      });
+      expect(offer.approvedAmount.toMajorUnitsString()).toBe("620000.00");
+    });
+
+    it("rejects an incoherent carried amount", () => {
+      expect(() =>
+        PricingEngine.priceOffer({ ...base, approvedAmount: m(1000), carriedAmount: m(5000) })
+      ).toThrow(/carried amount exceeds the approved amount/);
+      expect(() =>
+        PricingEngine.priceOffer({ ...base, carriedAmount: m(-1) })
+      ).toThrow(/carried amount cannot be negative/);
+    });
+
+    it("keeps the ordinary product bounds when nothing is carried", () => {
+      expect(() => PricingEngine.priceOffer({ ...base, approvedAmount: m(900000) })).toThrow(
+        /above the product maximum/
+      );
+      expect(() => PricingEngine.priceOffer({ ...base, approvedAmount: m(1000) })).toThrow(
+        /below the product minimum/
+      );
+    });
+
+    it("still enforces the term range on a rollover", () => {
+      expect(() =>
+        PricingEngine.priceOffer({ ...base, termMonths: 99, carriedAmount: m(50000) })
+      ).toThrow(/term range/);
+    });
+  });
 });

@@ -112,6 +112,13 @@ export class ConfigurationError extends DomainError {
   }
 }
 
+/** A renewal that cannot be underwritten on today's position. */
+export class RenewalNotPermittedError extends DomainError {
+  constructor(message: string, details: Record<string, unknown> = {}) {
+    super("RENEWAL_NOT_PERMITTED", message, 422, details);
+  }
+}
+
 export class ValidationError extends DomainError {
   constructor(message: string, details: Record<string, unknown> = {}) {
     super("VALIDATION_ERROR", message, 400, details);

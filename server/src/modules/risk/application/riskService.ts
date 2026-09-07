@@ -63,7 +63,12 @@ export class RiskService {
     return assessment;
   }
 
-  async calculateLimit(applicationId: string, riskAssessmentId: string, context: AuditContext) {
+  async calculateLimit(
+    applicationId: string,
+    riskAssessmentId: string,
+    context: AuditContext,
+    options: { excludeLoanId?: string } = {}
+  ) {
     const application = await this.db.lendingApplication.findUnique({
       where: { id: applicationId },
       include: { customer: true, requestedProduct: true },
@@ -74,7 +79,10 @@ export class RiskService {
       where: { id: riskAssessmentId },
     });
 
-    const exposure = await this.currentExposure(application.customerId);
+    // A renewal replaces a loan rather than adding to it, so the loan being
+    // rolled over must not count against the customer's remaining capacity —
+    // otherwise its own balance blocks it.
+    const exposure = await this.currentExposure(application.customerId, options.excludeLoanId);
 
     const result = LendingLimitEngine.calculate({
       monthlyIncome: resolveIncome(application.incomeCents, application.customer.monthlyIncomeCents),
@@ -117,9 +125,13 @@ export class RiskService {
   }
 
   /** Total the customer currently owes us across all live loans. */
-  async currentExposure(customerId: string): Promise<Money> {
+  async currentExposure(customerId: string, excludeLoanId?: string): Promise<Money> {
     const loans = await this.db.loan.findMany({
-      where: { customerId, status: { in: SERVICING } },
+      where: {
+        customerId,
+        status: { in: SERVICING },
+        ...(excludeLoanId ? { id: { not: excludeLoanId } } : {}),
+      },
       select: {
         outstandingPrincipalCents: true,
         outstandingInterestCents: true,

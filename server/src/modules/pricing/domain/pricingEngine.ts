@@ -33,6 +33,16 @@ export interface PricingInput {
   };
   /** Optional collateral value; reduces the risk premium when present. */
   collateralValue?: Money | null;
+  /**
+   * Balance being rolled over from an existing loan on the same product.
+   *
+   * It was already underwritten and lent under this product, so the product's
+   * amount bounds constrain only the NEW money advanced on top. Without this,
+   * a rollover whose principal plus accrued interest has grown past the
+   * product maximum could never be renewed — which would strand the borrower
+   * on a debt they already owe rather than preventing any lending.
+   */
+  carriedAmount?: Money | null;
 }
 
 export interface PricedFee {
@@ -76,11 +86,29 @@ export const PricingEngine = {
     if (!input.approvedAmount.isPositive()) {
       throw new PricingUnavailableError("approved amount must be positive");
     }
-    if (input.approvedAmount.lessThan(input.product.minAmount)) {
-      throw new PricingUnavailableError("approved amount is below the product minimum");
+
+    const carried = input.carriedAmount ?? Money.zero();
+    if (carried.isNegative()) {
+      throw new PricingUnavailableError("carried amount cannot be negative");
     }
-    if (input.approvedAmount.greaterThan(input.product.maxAmount)) {
-      throw new PricingUnavailableError("approved amount is above the product maximum");
+    if (carried.greaterThan(input.approvedAmount)) {
+      throw new PricingUnavailableError("carried amount exceeds the approved amount");
+    }
+
+    if (carried.isZero()) {
+      // Ordinary lending: the whole amount must sit inside the product range.
+      if (input.approvedAmount.lessThan(input.product.minAmount)) {
+        throw new PricingUnavailableError("approved amount is below the product minimum");
+      }
+      if (input.approvedAmount.greaterThan(input.product.maxAmount)) {
+        throw new PricingUnavailableError("approved amount is above the product maximum");
+      }
+    } else {
+      // Rollover: only the new money advanced on top is bound by the product.
+      const newMoney = input.approvedAmount.subtract(carried);
+      if (newMoney.isPositive() && newMoney.greaterThan(input.product.maxAmount)) {
+        throw new PricingUnavailableError("additional advance is above the product maximum");
+      }
     }
     if (input.termMonths < input.product.minTermMonths || input.termMonths > input.product.maxTermMonths) {
       throw new PricingUnavailableError("requested term is outside the product term range");

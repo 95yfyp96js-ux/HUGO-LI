@@ -6,6 +6,10 @@ import type { Clock } from "../../../shared/clock.js";
 import type { AuditContext, AuditService } from "../../audit/application/auditService.js";
 import { LoanStateMachine, type LoanStatus } from "../../loan/domain/loanStateMachine.js";
 import { RepaymentEngine, type RepaymentMethod } from "../../repayment/domain/repaymentEngine.js";
+import type { RiskService } from "../../risk/application/riskService.js";
+import type { PricingService } from "../../pricing/application/pricingService.js";
+import type { RiskGrade } from "../../risk/domain/riskEngine.js";
+import { RenewalNotPermittedError } from "../../../shared/errors.js";
 
 const SERVICING = ["ACTIVE", "DUE_SOON", "DUE", "OVERDUE", "DEFAULTED"];
 
@@ -32,7 +36,9 @@ export class RenewalService {
   constructor(
     private readonly db: PrismaClient,
     private readonly audit: AuditService,
-    private readonly clock: Clock
+    private readonly clock: Clock,
+    private readonly risk: RiskService,
+    private readonly pricing: PricingService
   ) {}
 
   async renew(loanId: string, input: RenewInput, context: AuditContext) {
@@ -40,7 +46,7 @@ export class RenewalService {
 
     const previous = await this.db.loan.findUnique({
       where: { id: loanId },
-      include: { snapshot: true, renewalAsNew: true },
+      include: { snapshot: true, renewalAsNew: true, customer: true },
     });
     if (!previous) throw new LoanNotFoundError(loanId);
     if (!SERVICING.includes(previous.status)) {
@@ -64,12 +70,88 @@ export class RenewalService {
     const termMonths = input.termMonths ?? snapshot.termMonths;
     const startDate = this.clock.now();
 
+    const product = await this.db.loanProduct.findUniqueOrThrow({
+      where: { id: previous.productId },
+    });
+
+    // ---- Re-underwrite ----------------------------------------------------
+    // A renewal is a NEW credit decision, not a copy of the old one. The
+    // customer's position has moved since the original loan — that is usually
+    // why they are renewing — so risk, limit and price are all recomputed
+    // from current internal data. Nothing is carried over from the previous
+    // assessment.
+    const applicationSequence = (await this.db.lendingApplication.count()) + 1;
+    const exposureExcludingThisLoan = await this.risk.currentExposure(
+      previous.customerId,
+      previous.id
+    );
+
+    // Created as a DRAFT: if the loan transaction below fails, what is left
+    // behind looks like an abandoned application, not an approved one.
+    const renewalApplication = await this.db.lendingApplication.create({
+      data: {
+        applicationNumber: formatSequenceNumber("APP", applicationSequence),
+        customerId: previous.customerId,
+        requestedProductId: previous.productId,
+        requestedAmountCents: newPrincipal.toMinorUnits(),
+        requestedTermMonths: termMonths,
+        purpose: `續借自 ${previous.loanNumber}`,
+        incomeCents: previous.customer.monthlyIncomeCents,
+        existingDebtCents: exposureExcludingThisLoan.toMinorUnits(),
+        status: "DRAFT",
+      },
+    });
+
+    const assessment = await this.risk.assessApplication(renewalApplication.id, context);
+    const limit = await this.risk.calculateLimit(renewalApplication.id, assessment.id, context, {
+      excludeLoanId: previous.id,
+    });
+
+    // Rolling an existing balance forward is not new lending, so the limit
+    // does not block it — refusing would not make the debt disappear, it
+    // would strand the customer on a loan they already cannot service. New
+    // money advanced on top IS new lending and must fit the limit and pass
+    // the risk decision.
+    if (additional.isPositive()) {
+      if (assessment.decision === "REJECT") {
+        throw new RenewalNotPermittedError(
+          "Cannot advance additional funds: the customer's current risk assessment is a decline",
+          { loanId, riskGrade: assessment.grade, riskDecision: assessment.decision }
+        );
+      }
+      const availableLimit = Money.fromMinorUnits(limit.availableLimitCents);
+      if (additional.greaterThan(availableLimit)) {
+        throw new RenewalNotPermittedError(
+          "Cannot advance additional funds: the amount exceeds the customer's available limit",
+          {
+            loanId,
+            additionalAmount: additional.toMajorUnitsString(),
+            availableLimit: availableLimit.toMajorUnitsString(),
+          }
+        );
+      }
+    }
+
+    // Priced against the NEW grade, so a customer whose position deteriorated
+    // is renewed on terms that reflect it.
+    const offer = await this.pricing.createOffer(
+      {
+        applicationId: renewalApplication.id,
+        approvedAmount: newPrincipal,
+        termMonths,
+        riskGrade: assessment.grade as RiskGrade,
+        // Already lent under this product; only new money is bound by its range.
+        carriedAmount: carriedBalance,
+      },
+      context
+    );
+
     const schedule = RepaymentEngine.generateSchedule({
       principal: newPrincipal,
-      ratePercent: snapshot.ratePercent,
+      ratePercent: offer.ratePercent,
       termMonths,
       startDate,
-      repaymentMethod: snapshot.repaymentMethod as RepaymentMethod,
+      repaymentMethod: offer.repaymentMethod as RepaymentMethod,
     });
     const maturityDate = schedule.installments[schedule.installments.length - 1]!.dueDate;
 
@@ -77,32 +159,23 @@ export class RenewalService {
     const originalLoanId = previous.renewalAsNew?.originalLoanId ?? previous.id;
     const loanSequence = (await this.db.loan.count()) + 1;
 
-    const applicationSequence = (await this.db.lendingApplication.count()) + 1;
-
     const result = await this.db.$transaction(async (tx) => {
       // Invariant §74.2: every loan originates from an approved application.
-      // A renewal is a fresh credit decision on new terms, so it gets its own
-      // application and approval record rather than reusing (and corrupting)
-      // the history of the original enquiry.
-      const renewalApplication = await tx.lendingApplication.create({
-        data: {
-          applicationNumber: formatSequenceNumber("APP", applicationSequence),
-          customerId: previous.customerId,
-          requestedProductId: previous.productId,
-          requestedAmountCents: newPrincipal.toMinorUnits(),
-          requestedTermMonths: termMonths,
-          purpose: `續借自 ${previous.loanNumber}`,
-          status: "APPROVED",
-        },
+      // The renewal's own application (underwritten above) is approved here,
+      // leaving the original enquiry's history untouched.
+      await tx.lendingApplication.update({
+        where: { id: renewalApplication.id },
+        data: { status: "APPROVED" },
       });
 
-      await tx.loanApproval.create({
+      const approval = await tx.loanApproval.create({
         data: {
           applicationId: renewalApplication.id,
+          loanOfferId: offer.id,
           decision: "APPROVED",
           approvedAmountCents: newPrincipal.toMinorUnits(),
           approvedTermMonths: termMonths,
-          approvedRatePercent: snapshot.ratePercent,
+          approvedRatePercent: offer.ratePercent,
           conditions: "[]",
           reason: input.reason,
           approvedBy: context.userId,
@@ -126,21 +199,23 @@ export class RenewalService {
         },
       });
 
+      // The new loan's terms come from its own offer and approval, never from
+      // the previous loan's snapshot.
       await tx.loanSnapshot.create({
         data: {
           loanId: newLoan.id,
           principalCents: newPrincipal.toMinorUnits(),
-          ratePercent: snapshot.ratePercent,
-          rateUnit: snapshot.rateUnit,
-          calculationMethod: snapshot.calculationMethod,
+          ratePercent: offer.ratePercent,
+          rateUnit: offer.rateUnit,
+          calculationMethod: offer.calculationMethod,
           termMonths,
-          repaymentMethod: snapshot.repaymentMethod,
-          productId: snapshot.productId,
-          productVersion: snapshot.productVersion,
-          feeRules: snapshot.feeRules,
-          pricingVersion: snapshot.pricingVersion,
-          riskAssessmentVersion: snapshot.riskAssessmentVersion,
-          approvalVersion: snapshot.approvalVersion,
+          repaymentMethod: offer.repaymentMethod,
+          productId: product.id,
+          productVersion: product.version,
+          feeRules: product.feeRules,
+          pricingVersion: offer.pricingVersion,
+          riskAssessmentVersion: assessment.modelVersion,
+          approvalVersion: approval.id,
         },
       });
 
@@ -242,9 +317,23 @@ export class RenewalService {
             carriedBalance: carriedBalance.toMajorUnitsString(),
             additionalAdvance: additional.toMajorUnitsString(),
             newPrincipal: newPrincipal.toMajorUnitsString(),
+            // The renewal was re-underwritten; record what it was decided on.
+            riskGrade: assessment.grade,
+            riskScore: assessment.score,
+            riskDecision: assessment.decision,
+            previousRatePercent: snapshot.ratePercent,
+            newRatePercent: offer.ratePercent,
           },
           reason: input.reason,
-          metadata: { originalLoanId, previousLoanId: previous.id, newLoanId: newLoan.id },
+          metadata: {
+            originalLoanId,
+            previousLoanId: previous.id,
+            newLoanId: newLoan.id,
+            renewalApplicationId: renewalApplication.id,
+            riskAssessmentId: assessment.id,
+            lendingLimitId: limit.id,
+            loanOfferId: offer.id,
+          },
         },
         tx
       );
