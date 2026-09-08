@@ -57,11 +57,18 @@ export function LoansPage() {
         title="放款帳戶"
         subtitle={data ? `共 ${data.total} 筆放款` : undefined}
         actions={
-          can("LOAN_CREATE") && (
-            <Link to="/loans/new" className="btn-primary">
-              新增放款
-            </Link>
-          )
+          <>
+            {can("LOAN_DISBURSE") && (
+              <Link to="/loans/new-slip" className="btn-primary">
+                貸款登記
+              </Link>
+            )}
+            {can("LOAN_CREATE") && (
+              <Link to="/loans/new" className="btn-secondary">
+                進階：產品導向精靈
+              </Link>
+            )}
+          </>
         }
       />
 

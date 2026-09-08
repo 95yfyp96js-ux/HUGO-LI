@@ -55,7 +55,7 @@ export function QuickActionsPage() {
 
   const actions = [
     { to: "/payments/new", label: "快速收款", icon: "💵", tone: "bg-emerald-500", permission: "PAYMENT_CREATE" },
-    { to: "/loans/new", label: "新增放款", icon: "➕", tone: "bg-brand-600", permission: "LOAN_CREATE" },
+    { to: "/loans/new-slip", label: "貸款登記", icon: "➕", tone: "bg-brand-600", permission: "LOAN_DISBURSE" },
     { to: "/customers/new", label: "新增客戶", icon: "👤", tone: "bg-violet-500", permission: "CUSTOMER_CREATE" },
     { to: "/loans/overdue", label: "逾期催收", icon: "⚠️", tone: "bg-rose-500", permission: "LOAN_READ" },
   ].filter((action) => can(action.permission));

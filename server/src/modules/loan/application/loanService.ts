@@ -44,6 +44,9 @@ function monthsBetweenDates(a: Date, b: Date): number {
   return months;
 }
 
+/** 期利率 (PERIOD) is a rate already quoted per a custom N-day period the officer names on the spot. */
+export type SlipRateUnit = "DAILY" | "MONTHLY" | "ANNUAL" | "PERIOD";
+
 export interface IssueLoanSlipInput {
   customerId: string;
   /** Prefill only — never a requirement. Null/omitted means no product at all. */
@@ -51,8 +54,10 @@ export interface IssueLoanSlipInput {
   principal: string | number;
   /** Defaults to now. */
   disbursedAt?: string;
-  rateUnit: "DAILY" | "MONTHLY";
+  rateUnit: SlipRateUnit;
   ratePercent: number;
+  /** Required, positive, when rateUnit is PERIOD: how many days is "one period". */
+  periodDays?: number;
   /** 逾期利率 — recorded for reference; not automatically applied to the balance. */
   overdueRatePercent?: number | null;
   repaymentMethod: SlipRepaymentMethod;
@@ -296,13 +301,25 @@ export class LoanService {
         allowed: SLIP_REPAYMENT_METHODS,
       });
     }
-    if (input.rateUnit !== "DAILY" && input.rateUnit !== "MONTHLY") {
-      throw new ValidationError("rateUnit must be DAILY or MONTHLY for a loan slip", {
+    if (!["DAILY", "MONTHLY", "ANNUAL", "PERIOD"].includes(input.rateUnit)) {
+      throw new ValidationError("rateUnit must be DAILY, MONTHLY, ANNUAL or PERIOD", {
         rateUnit: input.rateUnit,
       });
     }
     if (typeof input.ratePercent !== "number" || !Number.isFinite(input.ratePercent) || input.ratePercent < 0) {
       throw new ValidationError("ratePercent must be zero or positive");
+    }
+    if (input.rateUnit === "PERIOD") {
+      if (!Number.isInteger(input.periodDays) || (input.periodDays as number) <= 0) {
+        throw new ValidationError("periodDays（一期幾天）must be a positive integer when rateUnit is PERIOD", {
+          periodDays: input.periodDays,
+        });
+      }
+      if (input.termCount === undefined || input.termCount === null) {
+        throw new ValidationError("termCount（期數）is required when rateUnit is PERIOD", {
+          rateUnit: input.rateUnit,
+        });
+      }
     }
     if (input.overdueRatePercent != null && input.overdueRatePercent < 0) {
       throw new ValidationError("overdueRatePercent must be zero or positive");
@@ -326,15 +343,23 @@ export class LoanService {
 
     // Shop-wide rate ceiling (店規) applies here exactly as it does to a
     // priced product or a manager's approval override — a freeform slip is
-    // not a way around it.
-    await this.shopSettings.assertWithinCap(input.ratePercent, input.rateUnit as RateUnit);
+    // not a way around it. A PERIOD rate has no direct monthly-equivalent
+    // conversion of its own, so it is checked via its daily equivalent —
+    // the same arithmetic periodRate already uses for DAILY, just computed
+    // once here first.
+    if (input.rateUnit === "PERIOD") {
+      await this.shopSettings.assertWithinCap(input.ratePercent / input.periodDays!, "DAILY");
+    } else {
+      await this.shopSettings.assertWithinCap(input.ratePercent, input.rateUnit as RateUnit);
+    }
 
-    const termUnit: TermUnit = input.rateUnit === "DAILY" ? "DAY" : "MONTH";
+    const termUnit: TermUnit = input.rateUnit === "MONTHLY" || input.rateUnit === "ANNUAL" ? "MONTH" : "DAY";
     const disbursedAt = input.disbursedAt ? new Date(input.disbursedAt) : this.clock.now();
     if (Number.isNaN(disbursedAt.getTime())) {
       throw new ValidationError("disbursedAt is invalid", { disbursedAt: input.disbursedAt });
     }
-    const termCount = resolveSlipTermCount(input, termUnit, disbursedAt);
+    const termCount =
+      input.rateUnit === "PERIOD" ? (input.termCount as number) : resolveSlipTermCount(input, termUnit, disbursedAt);
 
     let template: { id: string; version: number } | null = null;
     if (input.templateProductId) {
@@ -350,7 +375,8 @@ export class LoanService {
       startDate: disbursedAt,
       repaymentMethod: input.repaymentMethod,
       termUnit,
-      rateUnit: input.rateUnit,
+      rateUnit: input.rateUnit === "PERIOD" ? "DAILY" : input.rateUnit,
+      periodDays: input.rateUnit === "PERIOD" ? input.periodDays : undefined,
     });
 
     const maturityDate = schedule.installments[schedule.installments.length - 1]!.dueDate;
@@ -406,6 +432,7 @@ export class LoanService {
           riskAssessmentVersion: "none",
           approvalVersion: "manual-slip",
           overdueRatePercent: input.overdueRatePercent ?? null,
+          periodDays: input.rateUnit === "PERIOD" ? input.periodDays : null,
           interestTiming: "POST_PAID",
         },
       });

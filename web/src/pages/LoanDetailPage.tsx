@@ -33,9 +33,10 @@ interface LoanDetail {
     rateUnit: string;
     termCount: number;
     termUnit: string;
+    periodDays: number | null;
     repaymentMethod: string;
     calculationMethod: string;
-    productVersion: number;
+    productVersion: number | null;
     pricingVersion: string;
     createdAt: string;
   } | null;
@@ -239,14 +240,22 @@ export function LoanDetailPage() {
             {loan.snapshot ? (
               <dl className="grid grid-cols-2 gap-4">
                 <Field label="利率">{percent(loan.snapshot.ratePercent, loan.snapshot.rateUnit)}</Field>
-                <Field label={termNoun(loan.snapshot.termUnit)}>
-                  {loan.snapshot.termCount} {termSuffix(loan.snapshot.termUnit)}
-                </Field>
+                {loan.snapshot.rateUnit === "PERIOD" ? (
+                  <Field label="期數（每期天數）">
+                    {loan.snapshot.termCount} 期（每期 {loan.snapshot.periodDays} 天）
+                  </Field>
+                ) : (
+                  <Field label={termNoun(loan.snapshot.termUnit)}>
+                    {loan.snapshot.termCount} {termSuffix(loan.snapshot.termUnit)}
+                  </Field>
+                )}
                 <Field label="還款方式">
                   {REPAYMENT_METHOD_LABELS[loan.snapshot.repaymentMethod] ?? loan.snapshot.repaymentMethod}
                 </Field>
                 <Field label="計息方式">{loan.snapshot.calculationMethod}</Field>
-                <Field label="產品版本">v{loan.snapshot.productVersion}</Field>
+                <Field label="產品版本">
+                  {loan.snapshot.productVersion != null ? `v${loan.snapshot.productVersion}` : "（無範本）"}
+                </Field>
                 <Field label="定價版本">{loan.snapshot.pricingVersion}</Field>
                 <Field label="起始日">{date(loan.startDate)}</Field>
                 <Field label="到期日">{date(loan.maturityDate)}</Field>

@@ -352,6 +352,10 @@ model LoanSnapshot {
   // OverdueEngine tracks delinquency status but does not accrue penalty
   // interest, so this is not automatically applied to the balance.
   overdueRatePercent    Float?
+  // Set only when rateUnit is "PERIOD": how many days is "one period" for a
+  // rate the officer quoted per a custom cycle (期利率) rather than day,
+  // month or year. Null for every other rate unit.
+  periodDays            Int?
   // POST_PAID (interest collected via the schedule, as every method already
   // does) is the only value ever written. PRE_PAID (interest deducted from
   // the amount disbursed) is a real option on the loan slip form but is

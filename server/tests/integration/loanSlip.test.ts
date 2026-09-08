@@ -122,6 +122,150 @@ describe("LoanService.issueLoanSlip", () => {
     expect(loan.scheduleLines[29]!.dueDate.toISOString().slice(0, 10)).toBe("2026-01-31");
   });
 
+  it("issues a 7-day daily-rate 一次本息 (BULLET) slip", async () => {
+    const { loan } = await env.container.loans.issueLoanSlip(
+      {
+        customerId,
+        principal: 20000,
+        rateUnit: "DAILY",
+        ratePercent: 0.2,
+        repaymentMethod: "BULLET",
+        interestTiming: "POST_PAID",
+        termCount: 7,
+        idempotencyKey: "slip-7-day-bullet",
+      },
+      ctx(env.users.userIds.MANAGER!)
+    );
+
+    expect(loan.scheduleLines).toHaveLength(1);
+    const only = loan.scheduleLines[0]!;
+    expect(Money.fromMinorUnits(only.principalDueCents).toMajorUnitsString()).toBe("20000.00");
+    // 20000 * 0.2% * 7 days = 280.00
+    expect(Money.fromMinorUnits(only.interestDueCents).toMajorUnitsString()).toBe("280.00");
+    expect(only.dueDate.toISOString().slice(0, 10)).toBe("2026-01-08");
+  });
+
+  it("issues a 先息後本 (INTEREST_ONLY) monthly slip", async () => {
+    const { loan } = await env.container.loans.issueLoanSlip(
+      {
+        customerId,
+        principal: 60000,
+        rateUnit: "MONTHLY",
+        ratePercent: 3,
+        repaymentMethod: "INTEREST_ONLY",
+        interestTiming: "POST_PAID",
+        termCount: 4,
+        idempotencyKey: "slip-interest-only-monthly",
+      },
+      ctx(env.users.userIds.MANAGER!)
+    );
+
+    expect(loan.scheduleLines).toHaveLength(4);
+    for (const line of loan.scheduleLines.slice(0, 3)) {
+      expect(Money.fromMinorUnits(line.interestDueCents).toMajorUnitsString()).toBe("1800.00");
+      expect(Money.fromMinorUnits(line.principalDueCents).isZero()).toBe(true);
+    }
+    const last = loan.scheduleLines[3]!;
+    expect(Money.fromMinorUnits(last.principalDueCents).toMajorUnitsString()).toBe("60000.00");
+    expect(Money.fromMinorUnits(last.interestDueCents).toMajorUnitsString()).toBe("1800.00");
+  });
+
+  it("issues an ANNUAL-rate slip with monthly installments (年息 -> 月付)", async () => {
+    const { loan } = await env.container.loans.issueLoanSlip(
+      {
+        customerId,
+        principal: 120000,
+        rateUnit: "ANNUAL",
+        ratePercent: 12,
+        repaymentMethod: "INTEREST_ONLY",
+        interestTiming: "POST_PAID",
+        termCount: 3,
+        idempotencyKey: "slip-annual-rate",
+      },
+      ctx(env.users.userIds.MANAGER!)
+    );
+
+    expect(loan.snapshot?.rateUnit).toBe("ANNUAL");
+    expect(loan.snapshot?.termUnit).toBe("MONTH");
+    expect(loan.scheduleLines).toHaveLength(3);
+    // 12%/year -> 1%/month; 120000 * 1% = 1200 each month.
+    for (const line of loan.scheduleLines) {
+      expect(Money.fromMinorUnits(line.interestDueCents).toMajorUnitsString()).toBe("1200.00");
+    }
+    expect(loan.scheduleLines[0]!.dueDate.toISOString().slice(0, 10)).toBe("2026-02-01");
+  });
+
+  it("issues a 期利率 (PERIOD) slip: rate charged as-is every N days, no conversion", async () => {
+    const { loan } = await env.container.loans.issueLoanSlip(
+      {
+        customerId,
+        principal: 10000,
+        rateUnit: "PERIOD",
+        ratePercent: 2,
+        periodDays: 3,
+        repaymentMethod: "INTEREST_ONLY",
+        interestTiming: "POST_PAID",
+        termCount: 3,
+        idempotencyKey: "slip-period-rate",
+      },
+      ctx(env.users.userIds.MANAGER!)
+    );
+
+    expect(loan.snapshot?.rateUnit).toBe("PERIOD");
+    expect(loan.snapshot?.periodDays).toBe(3);
+    expect(loan.scheduleLines).toHaveLength(3);
+    // Every period is a flat 2% of principal = 200.00, regardless of how many days it spans.
+    for (const line of loan.scheduleLines) {
+      expect(Money.fromMinorUnits(line.interestDueCents).toMajorUnitsString()).toBe("200.00");
+    }
+    // Due dates step by periodDays (3), not by 1 day.
+    expect(loan.scheduleLines.map((l) => l.dueDate.toISOString().slice(0, 10))).toEqual([
+      "2026-01-04",
+      "2026-01-07",
+      "2026-01-10",
+    ]);
+  });
+
+  it("rejects a PERIOD-rate slip missing periodDays", async () => {
+    await expect(
+      env.container.loans.issueLoanSlip(
+        {
+          customerId,
+          principal: 10000,
+          rateUnit: "PERIOD",
+          ratePercent: 2,
+          repaymentMethod: "BULLET",
+          interestTiming: "POST_PAID",
+          termCount: 3,
+          idempotencyKey: "slip-period-missing-days",
+        },
+        ctx(env.users.userIds.MANAGER!)
+      )
+    ).rejects.toThrow(/periodDays/);
+  });
+
+  it("enforces the shop-wide rate cap on a PERIOD rate via its daily equivalent", async () => {
+    await env.container.shopSettings.setRateCap(3, ctx(env.users.userIds.MANAGER!));
+
+    // 2% every day (periodDays=1) is a 60%/month equivalent, way over a 3% cap.
+    await expect(
+      env.container.loans.issueLoanSlip(
+        {
+          customerId,
+          principal: 10000,
+          rateUnit: "PERIOD",
+          ratePercent: 2,
+          periodDays: 1,
+          repaymentMethod: "BULLET",
+          interestTiming: "POST_PAID",
+          termCount: 3,
+          idempotencyKey: "slip-period-over-cap",
+        },
+        ctx(env.users.userIds.MANAGER!)
+      )
+    ).rejects.toMatchObject({ code: "RATE_CAP_EXCEEDED" });
+  });
+
   it("prefills productId/productVersion onto the snapshot when a template product is given", async () => {
     const { loan } = await env.container.loans.issueLoanSlip(
       {

@@ -153,6 +153,66 @@ describe("RepaymentEngine", () => {
     });
   });
 
+  describe("periodDays (期利率: a rate already quoted per a custom N-day period)", () => {
+    it("BULLET: 3 periods of 3 days each at 2%/period equals 6% simple interest, due 9 days out", () => {
+      const schedule = RepaymentEngine.generateSchedule({
+        principal: Money.fromMajorUnits(10000),
+        ratePercent: 2,
+        termCount: 3,
+        startDate: START,
+        repaymentMethod: "BULLET",
+        periodDays: 3,
+      });
+      expect(schedule.installments).toHaveLength(1);
+      expect(schedule.totalInterest.toMajorUnitsString()).toBe("600.00"); // 10000 * 2% * 3
+      expect(schedule.installments[0]!.dueDate.toISOString().slice(0, 10)).toBe("2026-01-10"); // +9 days
+    });
+
+    it("INTEREST_ONLY: each period is periodDays apart and charges the flat per-period rate", () => {
+      const schedule = RepaymentEngine.generateSchedule({
+        principal: Money.fromMajorUnits(10000),
+        ratePercent: 2,
+        termCount: 3,
+        startDate: START,
+        repaymentMethod: "INTEREST_ONLY",
+        periodDays: 3,
+      });
+      expect(schedule.installments).toHaveLength(3);
+      expect(schedule.installments.map((i) => i.dueDate.toISOString().slice(0, 10))).toEqual([
+        "2026-01-04",
+        "2026-01-07",
+        "2026-01-10",
+      ]);
+      for (const installment of schedule.installments) {
+        expect(installment.interestDue.toMajorUnitsString()).toBe("200.00"); // 10000 * 2%
+      }
+    });
+
+    it("agrees with the equivalent daily rate when periodDays is 1", () => {
+      const viaPeriod = RepaymentEngine.generateSchedule({
+        principal: Money.fromMajorUnits(10000),
+        ratePercent: 0.1,
+        termCount: 5,
+        startDate: START,
+        repaymentMethod: "INTEREST_ONLY",
+        periodDays: 1,
+      });
+      const viaDaily = RepaymentEngine.generateSchedule({
+        principal: Money.fromMajorUnits(10000),
+        ratePercent: 0.1,
+        termCount: 5,
+        startDate: START,
+        repaymentMethod: "INTEREST_ONLY",
+        rateUnit: "DAILY",
+        termUnit: "DAY",
+      });
+      expect(viaPeriod.totalInterest.equals(viaDaily.totalInterest)).toBe(true);
+      expect(viaPeriod.installments.map((i) => i.dueDate.getTime())).toEqual(
+        viaDaily.installments.map((i) => i.dueDate.getTime())
+      );
+    });
+  });
+
   it("BULLET charges the whole term's interest in a single installment", () => {
     const schedule = RepaymentEngine.generateSchedule({
       principal: Money.fromMajorUnits(50000),

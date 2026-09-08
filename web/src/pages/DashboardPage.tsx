@@ -64,8 +64,8 @@ export function DashboardPage() {
         subtitle="所有數字皆由後端引擎依實際交易紀錄計算，可點擊下鑽至原始資料"
         actions={
           <>
-            <Link to="/loans/new" className="btn-primary">
-              新增放款
+            <Link to="/loans/new-slip" className="btn-primary">
+              貸款登記
             </Link>
             <Link to="/payments/new" className="btn-secondary">
               快速收款

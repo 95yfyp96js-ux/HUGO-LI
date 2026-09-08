@@ -45,7 +45,16 @@ export function dateTime(value: string | Date | null | undefined): string {
 
 export function percent(value: number | null | undefined, unit?: string): string {
   if (value === null || value === undefined) return "—";
-  const suffix = unit === "MONTHLY" ? "／月" : unit === "DAILY" ? "／日" : unit === "ANNUAL" ? "／年" : "";
+  const suffix =
+    unit === "MONTHLY"
+      ? "／月"
+      : unit === "DAILY"
+        ? "／日"
+        : unit === "ANNUAL"
+          ? "／年"
+          : unit === "PERIOD"
+            ? "／期"
+            : "";
   return `${value}%${suffix}`;
 }
 
@@ -92,15 +101,20 @@ export const PRIORITY_LABELS: Record<string, string> = {
 };
 
 export const REPAYMENT_METHOD_LABELS: Record<string, string> = {
-  INTEREST_ONLY: "只還息、到期還本",
+  INTEREST_ONLY: "先息後本（按期付息，到期還本）",
   PRINCIPAL_AND_INTEREST: "等額本金（本金平均攤還）",
   EQUAL_INSTALLMENT: "等額本息（本利合計平均攤還）",
   PRINCIPAL_ONLY: "僅還本金",
-  BULLET: "一次還本息",
+  BULLET: "一次本息（到期一次還本付息）",
   CUSTOM: "自訂",
 };
 
-export const RATE_UNIT_LABEL: Record<string, string> = { DAILY: "日", MONTHLY: "月", ANNUAL: "年" };
+export const RATE_UNIT_LABEL: Record<string, string> = {
+  DAILY: "日",
+  MONTHLY: "月",
+  ANNUAL: "年",
+  PERIOD: "期",
+};
 
 /** A day-term product is measured in 天; a month-term one in 期. */
 export function termSuffix(termUnit: string | null | undefined): string {

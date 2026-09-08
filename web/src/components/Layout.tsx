@@ -24,9 +24,12 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
   {
     title: "放款",
     items: [
+      // Default entry point (一站式貸款記帳): self-fill loan registration
+      // first, ahead of everything else in this section — nobody should
+      // have to go looking for it.
+      { to: "/loans/new-slip", label: "貸款登記", icon: "📝", permission: "LOAN_DISBURSE" },
       { to: "/customers", label: "客戶", icon: "👤", permission: "CUSTOMER_READ" },
-      { to: "/lending/applications", label: "放款申請", icon: "📄", permission: "APPLICATION_READ" },
-      { to: "/loans/new-slip", label: "放款單", icon: "📝", permission: "LOAN_DISBURSE" },
+      { to: "/lending/applications", label: "放款申請（進階）", icon: "📄", permission: "APPLICATION_READ" },
       { to: "/loans", label: "放款帳戶", icon: "💰", permission: "LOAN_READ" },
       { to: "/loans/pending-disbursement", label: "待撥款", icon: "🏦", permission: "LOAN_READ" },
       { to: "/loans/overdue", label: "逾期管理", icon: "⚠️", permission: "LOAN_READ" },
@@ -55,10 +58,12 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
   },
 ];
 
-// The four operations that matter on a phone (§44).
+// The four operations that matter on a phone (§44). "放款" opens the
+// self-fill loan registration page directly — not the loan list — so the
+// default entry point on mobile is the same as on desktop.
 const MOBILE_NAV: NavItem[] = [
   { to: "/dashboard", label: "總覽", icon: "▤" },
-  { to: "/loans", label: "放款", icon: "💰" },
+  { to: "/loans/new-slip", label: "放款", icon: "💰" },
   { to: "/quick-actions", label: "快速", icon: "⚡" },
   { to: "/collections", label: "催收", icon: "📞" },
 ];

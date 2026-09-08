@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { api, newIdempotencyKey } from "../lib/api";
-import { date, money } from "../lib/format";
+import { date, money, REPAYMENT_METHOD_LABELS } from "../lib/format";
 import { ErrorBanner, PageHeader } from "../components/ui";
 
 interface Customer {
@@ -20,13 +20,22 @@ interface Product {
   rateUnit: string;
 }
 
-type RepaymentMethod = "BULLET" | "PRINCIPAL_AND_INTEREST" | "EQUAL_INSTALLMENT" | "INTEREST_ONLY";
+type RepaymentMethod = "EQUAL_INSTALLMENT" | "PRINCIPAL_AND_INTEREST" | "INTEREST_ONLY" | "BULLET";
+type RateType = "DAILY" | "MONTHLY" | "ANNUAL" | "PERIOD";
 
-const REPAYMENT_METHODS: Array<{ value: RepaymentMethod; label: string; hint: string }> = [
-  { value: "BULLET", label: "一次還本息", hint: "到期一次償還本金加全部利息" },
-  { value: "PRINCIPAL_AND_INTEREST", label: "等額本金", hint: "每期本金相同，利息依剩餘本金遞減" },
-  { value: "EQUAL_INSTALLMENT", label: "等額本息", hint: "每期本利合計金額大致相同" },
-  { value: "INTEREST_ONLY", label: "只還息到期還本", hint: "每期只繳利息，本金到期一次還清" },
+// Order and names match the reference: 等額本息／等額本金／先息後本／一次本息.
+const REPAYMENT_METHODS: Array<{ value: RepaymentMethod; hint: string }> = [
+  { value: "EQUAL_INSTALLMENT", hint: "每期本利合計金額大致相同" },
+  { value: "PRINCIPAL_AND_INTEREST", hint: "每期本金相同，利息依剩餘本金遞減" },
+  { value: "INTEREST_ONLY", hint: "每期只繳利息，本金到期一次還清" },
+  { value: "BULLET", hint: "到期一次償還本金加全部利息" },
+];
+
+const RATE_TYPES: Array<{ value: RateType; label: string }> = [
+  { value: "DAILY", label: "日息" },
+  { value: "MONTHLY", label: "月息" },
+  { value: "ANNUAL", label: "年息" },
+  { value: "PERIOD", label: "期利率" },
 ];
 
 interface CreatedLoan {
@@ -47,12 +56,18 @@ function todayString(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** What "期限" counts in, for each rate type. */
+function termNoun(rateType: RateType): string {
+  if (rateType === "DAILY" || rateType === "PERIOD") return "天數";
+  return "期數";
+}
+
 /**
- * 放款單 — 一筆借據一張單. Every term is typed in by hand for this one loan;
- * a template product only ever prefills the rate fields below, it is never
- * required and is never itself stored as a constraint. Nothing here computes
- * interest — the schedule shown after submit is exactly what the backend
- * RepaymentEngine returned.
+ * 貸款登記 — 一筆借據一張單. This is the default way a loan is entered: every
+ * term filled in by hand for this one loan, a template product only ever
+ * prefills the rate fields below, never a requirement. Nothing here
+ * computes interest — the schedule shown after submit is exactly what the
+ * backend RepaymentEngine returned.
  */
 export function NewLoanSlipPage() {
   const navigate = useNavigate();
@@ -63,14 +78,13 @@ export function NewLoanSlipPage() {
 
   const [principal, setPrincipal] = useState("");
   const [disbursedAt, setDisbursedAt] = useState(todayString());
-  const [rateUnit, setRateUnit] = useState<"DAILY" | "MONTHLY">("DAILY");
+  const [rateType, setRateType] = useState<RateType>("DAILY");
   const [ratePercent, setRatePercent] = useState("");
+  const [periodDays, setPeriodDays] = useState("");
   const [overdueRatePercent, setOverdueRatePercent] = useState("");
   const [repaymentMethod, setRepaymentMethod] = useState<RepaymentMethod>("BULLET");
   const [interestTiming, setInterestTiming] = useState<"POST_PAID" | "PRE_PAID">("POST_PAID");
-  const [termMode, setTermMode] = useState<"days" | "date">("days");
   const [termCount, setTermCount] = useState("");
-  const [maturityDate, setMaturityDate] = useState("");
 
   const [validationError, setValidationError] = useState<string | null>(null);
   const [loan, setLoan] = useState<CreatedLoan | null>(null);
@@ -91,8 +105,8 @@ export function NewLoanSlipPage() {
   function applyTemplate(id: string) {
     setTemplateId(id);
     const product = products?.items.find((p) => p.id === id);
-    if (product && (product.rateUnit === "DAILY" || product.rateUnit === "MONTHLY")) {
-      setRateUnit(product.rateUnit);
+    if (product && (product.rateUnit === "DAILY" || product.rateUnit === "MONTHLY" || product.rateUnit === "ANNUAL")) {
+      setRateType(product.rateUnit);
       setRatePercent(String(product.ratePercent));
     }
   }
@@ -107,13 +121,13 @@ export function NewLoanSlipPage() {
           templateProductId: templateId || null,
           principal,
           disbursedAt: new Date(disbursedAt).toISOString(),
-          rateUnit,
+          rateUnit: rateType,
           ratePercent: Number(ratePercent),
+          periodDays: rateType === "PERIOD" ? Number(periodDays) : undefined,
           overdueRatePercent: overdueRatePercent ? Number(overdueRatePercent) : null,
           repaymentMethod,
           interestTiming,
-          termCount: termMode === "days" ? Number(termCount) : undefined,
-          maturityDate: termMode === "date" ? new Date(maturityDate).toISOString() : undefined,
+          termCount: Number(termCount),
         },
       }),
     onSuccess: (result) => setLoan(result.loan),
@@ -142,31 +156,29 @@ export function NewLoanSlipPage() {
       setValidationError("請輸入利率");
       return;
     }
-    if (termMode === "days" && (!termCount || Number(termCount) <= 0)) {
-      setValidationError(rateUnit === "DAILY" ? "請輸入天數" : "請輸入月數");
+    if (rateType === "PERIOD" && (!periodDays || Number(periodDays) <= 0)) {
+      setValidationError("請輸入一期幾天");
       return;
     }
-    if (termMode === "date" && !maturityDate) {
-      setValidationError("請選擇到期日");
+    if (!termCount || Number(termCount) <= 0) {
+      setValidationError(`請輸入${termNoun(rateType)}`);
       return;
     }
     setValidationError(null);
     createSlip.mutate();
   }
 
-  const termUnitLabel = rateUnit === "DAILY" ? "天數" : "月數";
-
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader
-        title="放款單"
-        subtitle="一筆借據一張單：每筆放款現填條件，產品僅供套用參考，不會限制或要求填寫"
+        title="貸款登記"
+        subtitle="一站式貸款記帳：每筆貸款自己現填條件，產品僅供套用參考，不會限制或要求填寫"
       />
 
       {!loan ? (
         <div className="card space-y-5 p-5">
           <div>
-            <h2 className="mb-2 text-sm font-semibold text-slate-700">客戶</h2>
+            <h2 className="mb-2 text-sm font-semibold text-slate-700">客戶 *</h2>
             {customer ? (
               <div className="flex items-center justify-between rounded-lg border border-slate-200 p-3 text-sm">
                 <span>
@@ -237,7 +249,7 @@ export function NewLoanSlipPage() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="label" htmlFor="slip-principal">放款金額 *</label>
+              <label className="label" htmlFor="slip-principal">金額 *</label>
               <input
                 id="slip-principal"
                 className="input tabular"
@@ -257,30 +269,25 @@ export function NewLoanSlipPage() {
               />
             </div>
 
-            <div>
-              <span className="label">利率單位 *</span>
-              <div className="flex gap-4 pt-1 text-sm">
-                <label className="flex items-center gap-1.5">
-                  <input
-                    type="radio"
-                    checked={rateUnit === "DAILY"}
-                    onChange={() => setRateUnit("DAILY")}
-                  />
-                  日息
-                </label>
-                <label className="flex items-center gap-1.5">
-                  <input
-                    type="radio"
-                    checked={rateUnit === "MONTHLY"}
-                    onChange={() => setRateUnit("MONTHLY")}
-                  />
-                  月息
-                </label>
+            <div className="sm:col-span-2">
+              <span className="label">利率類型 *</span>
+              <div className="flex flex-wrap gap-4 pt-1 text-sm">
+                {RATE_TYPES.map((rt) => (
+                  <label key={rt.value} className="flex items-center gap-1.5">
+                    <input
+                      type="radio"
+                      checked={rateType === rt.value}
+                      onChange={() => setRateType(rt.value)}
+                    />
+                    {rt.label}
+                  </label>
+                ))}
               </div>
             </div>
+
             <div>
               <label className="label" htmlFor="slip-rate">
-                利率（% / {rateUnit === "DAILY" ? "日" : "月"}）*
+                利率（% / {RATE_TYPES.find((r) => r.value === rateType)!.label}）*
               </label>
               <input
                 id="slip-rate"
@@ -291,8 +298,36 @@ export function NewLoanSlipPage() {
               />
             </div>
 
+            {rateType === "PERIOD" && (
+              <div>
+                <label className="label" htmlFor="slip-period-days">一期幾天 *</label>
+                <input
+                  id="slip-period-days"
+                  className="input tabular"
+                  inputMode="numeric"
+                  value={periodDays}
+                  onChange={(e) => setPeriodDays(e.target.value)}
+                  placeholder="例如 3"
+                />
+              </div>
+            )}
+
             <div>
-              <label className="label" htmlFor="slip-overdue-rate">逾期利率（% / {rateUnit === "DAILY" ? "日" : "月"}，可留空）</label>
+              <label className="label" htmlFor="slip-term">期限（{termNoun(rateType)}）*</label>
+              <input
+                id="slip-term"
+                className="input tabular"
+                inputMode="numeric"
+                value={termCount}
+                onChange={(e) => setTermCount(e.target.value)}
+                placeholder={rateType === "PERIOD" ? "共幾期" : undefined}
+              />
+            </div>
+
+            <div>
+              <label className="label" htmlFor="slip-overdue-rate">
+                逾期利率（% / {RATE_TYPES.find((r) => r.value === rateType)!.label}，可留空）
+              </label>
               <input
                 id="slip-overdue-rate"
                 className="input tabular"
@@ -315,11 +350,11 @@ export function NewLoanSlipPage() {
                     checked={interestTiming === "POST_PAID"}
                     onChange={() => setInterestTiming("POST_PAID")}
                   />
-                  後收息（依還款期程收取，目前唯一支援方式）
+                  後收息（依還款期程收取）
                 </label>
                 <label className="flex items-center gap-1.5 text-slate-400">
                   <input type="radio" checked={interestTiming === "PRE_PAID"} disabled />
-                  先收息（撥款時先扣除利息）— 系統尚未實作，暫無法選擇
+                  先收息（撥款時先扣除利息）— 尚未開放
                 </label>
               </div>
             </div>
@@ -341,42 +376,11 @@ export function NewLoanSlipPage() {
                       checked={repaymentMethod === m.value}
                       onChange={() => setRepaymentMethod(m.value)}
                     />
-                    {m.label}
+                    {REPAYMENT_METHOD_LABELS[m.value]}
                   </span>
                   <span className="pl-5 text-xs text-slate-500">{m.hint}</span>
                 </label>
               ))}
-            </div>
-          </div>
-
-          <div>
-            <span className="label">到期日或天數 *</span>
-            <div className="mt-1 flex flex-wrap items-center gap-3">
-              <label className="flex items-center gap-1.5 text-sm">
-                <input type="radio" checked={termMode === "days"} onChange={() => setTermMode("days")} />
-                指定{termUnitLabel}
-              </label>
-              {termMode === "days" && (
-                <input
-                  className="input tabular w-32"
-                  inputMode="numeric"
-                  value={termCount}
-                  onChange={(e) => setTermCount(e.target.value)}
-                  placeholder={termUnitLabel}
-                />
-              )}
-              <label className="flex items-center gap-1.5 text-sm">
-                <input type="radio" checked={termMode === "date"} onChange={() => setTermMode("date")} />
-                指定到期日
-              </label>
-              {termMode === "date" && (
-                <input
-                  type="date"
-                  className="input w-40"
-                  value={maturityDate}
-                  onChange={(e) => setMaturityDate(e.target.value)}
-                />
-              )}
             </div>
           </div>
 
@@ -385,14 +389,14 @@ export function NewLoanSlipPage() {
 
           <div className="flex justify-end border-t border-slate-200 pt-4">
             <button className="btn-primary" onClick={submit} disabled={createSlip.isPending}>
-              {createSlip.isPending ? "建立中…" : "建立放款單"}
+              {createSlip.isPending ? "建立中…" : "建立並產生還款計劃"}
             </button>
           </div>
         </div>
       ) : (
         <div className="space-y-4">
           <div className="card p-5">
-            <h2 className="mb-4 text-sm font-semibold text-slate-700">還款約定表（{loan.loanNumber}）</h2>
+            <h2 className="mb-4 text-sm font-semibold text-slate-700">還款計劃（{loan.loanNumber}）</h2>
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
