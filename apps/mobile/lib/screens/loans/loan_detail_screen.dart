@@ -6,6 +6,7 @@ import '../../db/app_database.dart';
 import '../../domain/dashboard_repository.dart';
 import '../../domain/enum_mapping.dart';
 import '../../domain/license_repository.dart';
+import '../../domain/schedule_item_math.dart';
 import '../../providers/app_providers.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/format.dart';
@@ -47,7 +48,7 @@ class LoanDetailScreen extends ConsumerWidget {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(
-                            formatCents(loan.principalCents),
+                            formatMoney(loan.principalCents),
                             style: Theme.of(context).textTheme.headlineSmall,
                           ),
                           _StatusBadge(status: status),
@@ -73,19 +74,19 @@ class LoanDetailScreen extends ConsumerWidget {
                             children: [
                               _SummaryStat(
                                 label: '已撥款',
-                                value: formatCents(s.disbursedCents),
+                                value: formatMoney(s.disbursedCents),
                               ),
                               _SummaryStat(
                                 label: '已收利息',
-                                value: formatCents(s.interestReceivedCents),
+                                value: formatMoney(s.interestReceivedCents),
                               ),
                               _SummaryStat(
                                 label: '已收本金',
-                                value: formatCents(s.principalReceivedCents),
+                                value: formatMoney(s.principalReceivedCents),
                               ),
                               _SummaryStat(
                                 label: '未償本金',
-                                value: formatCents(s.outstandingPrincipalCents),
+                                value: formatMoney(s.outstandingPrincipalCents),
                               ),
                             ],
                           );
@@ -143,22 +144,60 @@ class LoanDetailScreen extends ConsumerWidget {
     );
   }
 
+  /// 確認撥款：可選實際撥款日（預設今天、可往回選、不可選未來）。
+  ///
+  /// 「錢早就借出去了、現在才建檔」是出借人的常態，所以補登歷史撥款是必要
+  /// 功能而不是測試後門。撥款日一旦定案，計畫表的到期日與計息起算日都以它
+  /// 為錨點（見 docs/interest-rules.md §1、docs/state-machines.md §1.1）。
   Future<void> _confirmDisbursement(BuildContext context, WidgetRef ref) async {
+    DateTime disbursedAt = DateTime.now();
+
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('確認撥款'),
-        content: const Text('確認後將寫入撥款分錄並開始計息，此動作無法復原（後續調整需用沖正分錄）。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setState) => AlertDialog(
+          title: const Text('確認撥款'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('確認後將寫入撥款分錄並開始計息，此動作無法復原（後續調整需用沖正分錄）。'),
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('實際撥款日'),
+                subtitle: Text(formatDate(disbursedAt)),
+                trailing: const Icon(Icons.calendar_month),
+                onTap: () async {
+                  final now = DateTime.now();
+                  final picked = await showDatePicker(
+                    context: dialogContext,
+                    initialDate: disbursedAt,
+                    firstDate: now.subtract(const Duration(days: 3650)),
+                    lastDate: now, // 撥款是既成事實，不能預約未來
+                    helpText: '選擇實際撥款日（不可選未來）',
+                  );
+                  if (picked != null) setState(() => disbursedAt = picked);
+                },
+              ),
+              const Text(
+                '補登過去的撥款日時，計畫表到期日與計息都會從那天重新起算；'
+                '若已逾期，日結會立刻把逾期期別標出來。',
+                style: TextStyle(fontSize: 12),
+              ),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('確認撥款'),
-          ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('確認撥款'),
+            ),
+          ],
+        ),
       ),
     );
     if (confirmed != true) return;
@@ -166,9 +205,11 @@ class LoanDetailScreen extends ConsumerWidget {
     try {
       final licenseRepo = ref.read(licenseRepositoryProvider);
       final loanRepo = ref.read(loanRepositoryProvider);
-      await licenseRepo.performGatedWrite(
-        () => loanRepo.confirmDisbursement(loanId),
-      );
+      await licenseRepo.performGatedWrite(() async {
+        await loanRepo.confirmDisbursement(loanId, at: disbursedAt);
+        // 補登歷史撥款可能立刻產生逾期期別，撥款後馬上跑一次日結。
+        await loanRepo.runDailyBatch(loanId: loanId);
+      });
       ref.invalidate(dashboardSnapshotProvider);
     } on TrialExhaustedException catch (e) {
       if (!context.mounted) return;
@@ -249,10 +290,28 @@ class _ScheduleTile extends StatelessWidget {
           ),
         ),
         title: Text('到期日 ${formatDate(item.dueDate)}'),
-        subtitle: Text(
-          '本金 ${formatCents(item.principalCents)} + 利息 ${formatCents(item.interestCents)}'
-          '${item.interestPaidCents + item.principalPaidCents > 0 ? '（已繳 ${formatCents(item.interestPaidCents + item.principalPaidCents)}）' : ''}',
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '本金 ${formatMoney(item.principalCents)} ＋ 利息 '
+              '${formatMoney(item.interestCents)} ＝ ${formatMoney(item.totalDueCents)}',
+            ),
+            if (item.shortfallCents > 0 && item.paidCents > 0)
+              // 差額不到 1 元也必須看得見，否則使用者以為繳清了，帳其實沒平。
+              Text(
+                '已繳 ${formatMoney(item.paidCents)} · 尚差 '
+                '${formatMoney(item.shortfallCents)}',
+                style: const TextStyle(
+                  color: AppColors.warning,
+                  fontWeight: FontWeight.bold,
+                ),
+              )
+            else if (item.paidCents > 0)
+              Text('已繳 ${formatMoney(item.paidCents)}'),
+          ],
         ),
+        isThreeLine: item.paidCents > 0,
         trailing: Text(
           _statusLabel(status),
           style: TextStyle(color: color, fontWeight: FontWeight.bold),

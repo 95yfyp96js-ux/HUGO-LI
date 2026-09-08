@@ -4,6 +4,7 @@ import 'package:lending_engine/lending_engine.dart' as engine;
 
 import '../db/app_database.dart';
 import 'enum_mapping.dart';
+import 'schedule_item_math.dart';
 import 'id_gen.dart';
 
 class IllegalLoanTransitionException implements Exception {
@@ -11,6 +12,24 @@ class IllegalLoanTransitionException implements Exception {
   final String message;
   @override
   String toString() => message;
+}
+
+/// 收款時可以一鍵帶入的三種金額（分）。
+class PaymentSuggestion {
+  const PaymentSuggestion({
+    required this.currentDueCents,
+    required this.overdueCents,
+    required this.payoffCents,
+  });
+
+  /// 最早一期未繳清的剩餘應繳（本期應繳）。
+  final int currentDueCents;
+
+  /// 已逾期期別的剩餘應繳合計。
+  final int overdueCents;
+
+  /// 全部未繳清期別的剩餘應繳合計（一次結清金額）。
+  final int payoffCents;
 }
 
 /// 貸款登記、計畫產生、撥款確認、還款入帳（見 spec §1、§4、§6、§8）。
@@ -159,6 +178,31 @@ class LoanRepository {
         '撥款 ${loan.principalCents} 分',
       );
     });
+  }
+
+  /// 還款金額建議（分）。收款對話框用它預先帶入**精確到分**的金額，
+  /// 使用者不必、也不應該照畫面上被截去分的數字自己輸入。
+  Future<PaymentSuggestion> paymentSuggestion(String loanId) async {
+    final items = await scheduleFor(loanId);
+    int currentDue = 0; // 最早一期未繳清的剩餘應繳
+    int overdue = 0; // 所有已逾期期別的剩餘應繳
+    int total = 0; // 全部未繳清期別的剩餘應繳（＝結清金額）
+
+    for (final item in items) {
+      if (item.isSettledPeriod) continue;
+      final int remaining = item.shortfallCents;
+      if (remaining <= 0) continue;
+
+      total += remaining;
+      if (currentDue == 0) currentDue = remaining;
+      if (item.status == 'overdue') overdue += remaining;
+    }
+
+    return PaymentSuggestion(
+      currentDueCents: currentDue,
+      overdueCents: overdue,
+      payoffCents: total,
+    );
   }
 
   /// 記一筆還款：依瀑布順序、由舊到新沖銷各期，溢收記為調整分錄

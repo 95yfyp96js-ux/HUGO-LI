@@ -92,6 +92,13 @@ flutter run --dart-define=DEV_LICENSE=1
   SHA-256 雜湊供查重（不明文比對），畫面一律遮罩顯示末 4 碼。
 - 設定頁「匯出備份」可把目前資料庫複製一份到本機 `backups/` 子目錄。
 
+## 金額規則
+
+帳務內部一律整數「分」。畫面上只有兩種呈現：可操作金額（應繳、差額、餘額、
+逐期本息）**顯示到分**；看板概覽卡用整元，規則寫死為 ROUND_HALF_UP。
+收款金額預設帶入本期應繳的精確分值，差額小於 1 元也會顯示成「尚差 NT$0.88」。
+輸入解析全程走字串、不經過 `double`。規則由 `apps/mobile/test/format_test.dart` 鎖住。
+
 ## 手動驗收
 
 自動化測試證明不了觸控、鍵盤遮擋、字級、真機效能與「重啟後資料還在」。
@@ -109,6 +116,9 @@ flutter run --dart-define=DEV_LICENSE=1
 - [x] 部分還本後最終全額清償，期末餘額為 0
       （`apps/mobile/test/loan_repository_test.dart`）
 - [x] 身分證字號畫面遮罩、DB 只存密文＋雜湊
+- [x] 金額全面對齊到分，收款預設帶入精確應繳（`test/format_test.dart`）
+- [x] 撥款日可補登歷史日期、不可選未來
+- [x] 看板「待收金額」＝在貸本金＋待收利息，撥款後不會顯示 0
 - [ ] 第三人在有 Android Studio / Xcode 的機器上依 `docs/RUNNING.md`
       實際 `flutter run` 起來（本環境無模擬器，未能親自驗證）
 - [ ] 有人照 `docs/MANUAL-QA.md` 在真機上走完 10 步

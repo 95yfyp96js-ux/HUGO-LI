@@ -36,7 +36,7 @@ class LoanListScreen extends ConsumerWidget {
               final status = parseLoanStatus(loan.status);
               return Card(
                 child: ListTile(
-                  title: Text(formatCents(loan.principalCents)),
+                  title: Text(formatMoney(loan.principalCents)),
                   subtitle: Text(
                     '${_methodLabel(parseRepaymentMethod(loan.method))} · ${loan.tenorPeriods} 期 · '
                     '${_statusLabel(status)}',

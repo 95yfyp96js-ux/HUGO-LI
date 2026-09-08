@@ -350,7 +350,7 @@ class _SchedulePreview extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '本金合計 ${formatCents(result.totalPrincipalCents)} · 利息合計 ${formatCents(result.totalInterestCents)}',
+              '本金合計 ${formatMoney(result.totalPrincipalCents)} · 利息合計 ${formatMoney(result.totalInterestCents)}',
             ),
             const Divider(),
             SizedBox(
@@ -364,9 +364,9 @@ class _SchedulePreview extends StatelessWidget {
                     leading: Text('#${item.periodNumber}'),
                     title: Text(formatDate(item.dueDate)),
                     subtitle: Text(
-                      '本金 ${formatCents(item.principalCents)} + 利息 ${formatCents(item.interestCents)}',
+                      '本金 ${formatMoney(item.principalCents)} + 利息 ${formatMoney(item.interestCents)}',
                     ),
-                    trailing: Text(formatCents(item.totalDueCents)),
+                    trailing: Text(formatMoney(item.totalDueCents)),
                   );
                 },
               ),

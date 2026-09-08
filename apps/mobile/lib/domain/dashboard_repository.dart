@@ -3,6 +3,7 @@ import 'package:lending_engine/lending_engine.dart'; // LoanStatusX (isDisbursed
 
 import 'enum_mapping.dart';
 import 'loan_repository.dart';
+import 'schedule_item_math.dart';
 
 /// 看板聚合（見 docs/ASSUMPTIONS.md §8）：全部數字皆由
 /// `packages/ledger` 重放 Ledger 得出，本層只負責把 Drift 資料整理成
@@ -27,12 +28,18 @@ class DashboardRepository {
       final items = await _loans.scheduleFor(loan.id);
       int totalBilled = 0;
       int overdueBilled = 0;
+      int unpaidInterest = 0;
       for (final item in items) {
+        // 合約上還沒收到的利息（含未到期期別）——「待收利息」的來源。
+        if (!item.isSettledPeriod) {
+          final int owed = item.interestCents - item.interestPaidCents;
+          if (owed > 0) unpaidInterest += owed;
+        }
         final bool billed = !item.dueDate.isAfter(now);
         if (!billed) continue;
-        totalBilled += item.principalCents + item.interestCents;
+        totalBilled += item.totalDueCents;
         if (item.status == 'overdue') {
-          overdueBilled += item.principalCents + item.interestCents;
+          overdueBilled += item.totalDueCents;
         }
       }
       billing.add(
@@ -40,6 +47,7 @@ class DashboardRepository {
           loanId: loan.id,
           totalBilledCents: totalBilled,
           overdueBilledCents: overdueBilled,
+          unpaidInterestCents: unpaidInterest,
         ),
       );
     }

@@ -12,6 +12,7 @@ import 'package:mobile/app.dart';
 import 'package:mobile/db/app_database.dart';
 import 'package:mobile/db/pii_codec.dart';
 import 'package:mobile/domain/loan_repository.dart';
+import 'package:mobile/domain/schedule_item_math.dart';
 import 'package:mobile/providers/app_providers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -102,23 +103,26 @@ void main() {
     await tester.tap(find.text('建立貸款（建約）'));
     await _settle(tester);
 
-    // 第 4 步：確認撥款。
+    // 第 4 步：確認撥款。對話框可選實際撥款日，預設今天。
     expect(find.text('確認撥款'), findsOneWidget);
     await tester.tap(find.text('確認撥款'));
     await _settle(tester);
+    expect(find.text('實際撥款日'), findsOneWidget, reason: '可補登歷史撥款');
     // 對話框中的確認撥款按鈕。
     await tester.tap(find.text('確認撥款').last);
     await _settle(tester);
 
     expect(find.text('記一筆還款'), findsWidgets);
 
-    // 記一筆還款：第一期金額。
+    // 記一筆還款：金額欄已預先帶入本期應繳的精確分值，使用者直接送出即可，
+    // 不必照畫面上的整數自己敲（那會短少 88 分）。
     await tester.tap(find.text('記一筆還款').first);
     await _settle(tester);
-    await tester.enterText(
-      find.widgetWithText(TextField, '繳款金額（元）'),
-      '8885',
-    ); // 約當第 1 期應繳
+    final amountField = tester.widget<TextField>(
+      find.widgetWithText(TextField, '繳款金額（元，可到小數兩位）'),
+    );
+    expect(amountField.controller!.text, '8884.88');
+    expect(find.textContaining('本期應繳 NT\$8,884.88'), findsWidgets);
     await tester.tap(find.text('確認入帳'));
     await _settle(tester);
 
@@ -132,8 +136,9 @@ void main() {
 
     final schedule = await loanRepo.scheduleFor(loan.id);
     expect(schedule, hasLength(12));
-    // 繳款日早於到期日，全額繳清第 1 期即視為提前繳清（PREPAID）。
-    expect(schedule.first.status, anyOf('paid', 'partial', 'prepaid'));
+    // 帶入的是精確金額，第 1 期一次繳清、沒有尾差（繳款日早於到期日 → PREPAID）。
+    expect(schedule.first.status, 'prepaid');
+    expect(schedule.first.shortfallCents, 0);
 
     final ledgerEntries = await loanRepo.ledgerFor(loan.id);
     expect(
@@ -158,6 +163,13 @@ void main() {
     final snapshot = await dashboardRepo.compute();
     expect(snapshot.totalDisbursedCents, loan.principalCents);
     expect(snapshot.totalInterestReceivedCents, greaterThan(0));
+    // 撥款後待收金額必須反映「還有多少錢沒回來」，不可以是 0。
+    expect(snapshot.totalOutstandingPrincipalCents, greaterThan(0));
+    expect(
+      snapshot.totalReceivableCents,
+      snapshot.totalOutstandingPrincipalCents +
+          snapshot.totalUnpaidInterestCents,
+    );
 
     await db.close();
   });

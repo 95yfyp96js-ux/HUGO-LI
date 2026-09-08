@@ -14,9 +14,8 @@ import 'package:mobile/db/seed.dart';
 import 'package:mobile/domain/borrower_repository.dart';
 import 'package:mobile/domain/dashboard_repository.dart';
 import 'package:mobile/domain/loan_repository.dart';
-
-/// App 畫面顯示金額的規則（widgets/format.dart）：分 → 元，無條件捨去。
-int displayedDollars(int cents) => cents ~/ 100;
+import 'package:mobile/domain/schedule_item_math.dart';
+import 'package:mobile/widgets/format.dart';
 
 void main() {
   late AppDatabase db;
@@ -55,17 +54,17 @@ void main() {
   );
 
   group('MANUAL-QA 腳本預期值', () {
-    test('第 3 步：計畫預覽 12 期，每期應繳顯示 NT\$8,884', () async {
+    test('第 3 步：計畫預覽 12 期，每期應繳顯示 NT\$8,884.88（精確到分）', () async {
       final loan = await registerQaLoan();
       final schedule = await loans.scheduleFor(loan.id);
 
       expect(schedule, hasLength(12));
       final first = schedule.first;
-      expect(first.principalCents + first.interestCents, 888488);
-      expect(displayedDollars(888488), 8884);
-      expect(displayedDollars(first.principalCents), 7884);
-      expect(displayedDollars(first.interestCents), 1000);
-      expect(displayedDollars(first.closingBalanceCents), 92115);
+      expect(first.totalDueCents, 888488);
+      expect(formatMoney(first.totalDueCents), 'NT\$8,884.88');
+      expect(formatMoney(first.principalCents), 'NT\$7,884.88');
+      expect(formatMoney(first.interestCents), 'NT\$1,000.00');
+      expect(formatMoney(first.closingBalanceCents), 'NT\$92,115.12');
       expect(schedule.last.closingBalanceCents, 0);
     });
 
@@ -82,7 +81,7 @@ void main() {
       expect(snapshot.totalOverdueCents, 0);
     });
 
-    test('第 5 步：確認撥款後，貸款總額 NT\$100,000、分錄剛好 1 筆', () async {
+    test('第 5 步：撥款後待收金額＝在貸本金＋待收利息，絕不是 0', () async {
       final loan = await registerQaLoan();
       await loans.confirmDisbursement(loan.id);
 
@@ -90,19 +89,62 @@ void main() {
       expect(entries, hasLength(1));
       expect(entries.single.type, 'disbursement');
       expect(entries.single.amountCents, 10000000);
+      expect((await loans.findById(loan.id))!.status, 'current');
 
       final snapshot = await dashboard.compute();
-      expect(displayedDollars(snapshot.totalDisbursedCents), 100000);
+      expect(formatMoney(snapshot.totalDisbursedCents), 'NT\$100,000.00');
       expect(snapshot.totalInterestReceivedCents, 0);
-      expect((await loans.findById(loan.id))!.status, 'current');
+
+      // 這是修掉的第 2 項缺陷：撥出去 10 萬，待收不可以顯示 0。
+      expect(snapshot.totalOutstandingPrincipalCents, 10000000);
+      expect(snapshot.totalUnpaidInterestCents, 661853);
+      expect(snapshot.totalReceivableCents, 10661853);
+      expect(
+        formatMoneyRounded(snapshot.totalOutstandingPrincipalCents),
+        'NT\$100,000',
+      );
+      expect(
+        formatMoneyRounded(snapshot.totalUnpaidInterestCents),
+        'NT\$6,619',
+      );
     });
 
-    test('第 6 步：照畫面繳 8,884 元會短少 88 分，第 1 期變「部分」', () async {
+    test('第 6 步：用對話框帶入的精確金額繳款，第 1 期一次繳清、不留尾差', () async {
+      final loan = await registerQaLoan();
+      await loans.confirmDisbursement(loan.id);
+
+      // 對話框預設帶入的就是這個值，使用者不必自己算、也不必自己打。
+      final suggestion = await loans.paymentSuggestion(loan.id);
+      expect(suggestion.currentDueCents, 888488);
+      expect(centsToInput(suggestion.currentDueCents), '8884.88');
+
+      await loans.recordPayment(
+        loanId: loan.id,
+        amountCents: suggestion.currentDueCents,
+        paidAt: DateTime.now(),
+      );
+
+      final first = (await loans.scheduleFor(loan.id)).first;
+      expect(first.status, 'prepaid', reason: '繳款日早於到期日 → 提前繳清');
+      expect(first.shortfallCents, 0, reason: '不再有 88 分的尾差');
+
+      final snapshot = await dashboard.compute();
+      expect(snapshot.totalInterestReceivedCents, 100000);
+      expect(snapshot.totalOutstandingPrincipalCents, 9211512);
+      expect(snapshot.totalUnpaidInterestCents, 561853);
+      expect(snapshot.totalReceivableCents, 9773365);
+
+      // 待收金額應該等於「一次結清」金額——兩個數字算法不同，對得起來才對。
+      final after = await loans.paymentSuggestion(loan.id);
+      expect(after.payoffCents, snapshot.totalReceivableCents);
+    });
+
+    test('第 7 步：故意只繳整數 8,884 元時，畫面必須看得到「尚差 NT\$0.88」', () async {
       final loan = await registerQaLoan();
       await loans.confirmDisbursement(loan.id);
       await loans.recordPayment(
         loanId: loan.id,
-        amountCents: 8884 * 100,
+        amountCents: parseAmountToCents('8884')!,
         paidAt: DateTime.now(),
       );
 
@@ -110,75 +152,34 @@ void main() {
       expect(first.status, 'partial');
       expect(first.interestPaidCents, 100000, reason: '瀑布：利息先收滿');
       expect(first.principalPaidCents, 788400);
-      expect(first.principalCents - first.principalPaidCents, 88);
 
-      final snapshot = await dashboard.compute();
-      expect(displayedDollars(snapshot.totalInterestReceivedCents), 1000);
-      final summary = await loans.replaySummary(loan.id);
-      expect(summary.principalReceivedCents, 788400);
-      expect(summary.outstandingPrincipalCents, 9211600);
+      // 差額小於 1 元，舊版顯示規則會把它變成 0 而被使用者忽略。
+      expect(first.shortfallCents, 88);
+      expect(formatMoney(first.shortfallCents), 'NT\$0.88');
+      expect(formatMoney(first.paidCents), 'NT\$8,884.00');
+
+      // 對話框下一次會帶入剩下的 88 分，不必使用者自己算。
+      final suggestion = await loans.paymentSuggestion(loan.id);
+      expect(suggestion.currentDueCents, 88);
+      expect(centsToInput(88), '0.88');
     });
 
-    test('第 7 步：補繳 1 元後第 1 期繳清，多的 12 分串到第 2 期利息', () async {
+    test('第 8 步：用「一次結清」金額付清，狀態轉 SETTLED、待收歸零', () async {
       final loan = await registerQaLoan();
       await loans.confirmDisbursement(loan.id);
-      await loans.recordPayment(
-        loanId: loan.id,
-        amountCents: 8884 * 100,
-        paidAt: DateTime.now(),
-      );
-      await loans.recordPayment(
-        loanId: loan.id,
-        amountCents: 100,
-        paidAt: DateTime.now(),
-      );
-
-      final schedule = await loans.scheduleFor(loan.id);
-      expect(schedule[0].status, 'prepaid', reason: '繳款日早於到期日 → 提前繳清');
-      expect(schedule[0].principalPaidCents, 788488);
-      expect(schedule[1].status, 'partial');
-      expect(schedule[1].interestPaidCents, 12);
-
-      final snapshot = await dashboard.compute();
-      expect(snapshot.totalInterestReceivedCents, 100012);
-      expect(displayedDollars(snapshot.totalInterestReceivedCents), 1000);
-    });
-
-    test('第 8 步：一次結清剩餘 NT\$97,733，狀態轉 SETTLED、餘額為 0', () async {
-      final loan = await registerQaLoan();
-      await loans.confirmDisbursement(loan.id);
-      await loans.recordPayment(
-        loanId: loan.id,
-        amountCents: 8884 * 100,
-        paidAt: DateTime.now(),
-      );
-      await loans.recordPayment(
-        loanId: loan.id,
-        amountCents: 100,
-        paidAt: DateTime.now(),
-      );
-
-      final before = await loans.scheduleFor(loan.id);
-      final remaining = before.fold<int>(
-        0,
-        (sum, i) =>
-            sum +
-            (i.principalCents - i.principalPaidCents) +
-            (i.interestCents - i.interestPaidCents),
-      );
-      expect(remaining, 9773353);
-      expect(displayedDollars(remaining), 97733);
+      final suggestion = await loans.paymentSuggestion(loan.id);
+      expect(suggestion.payoffCents, 10661853);
+      expect(formatMoney(suggestion.payoffCents), 'NT\$106,618.53');
 
       await loans.recordPayment(
         loanId: loan.id,
-        amountCents: remaining,
+        amountCents: suggestion.payoffCents,
         paidAt: DateTime.now(),
       );
 
       final after = await loans.scheduleFor(loan.id);
       for (final item in after) {
-        expect(item.principalPaidCents, item.principalCents);
-        expect(item.interestPaidCents, item.interestCents);
+        expect(item.shortfallCents, 0, reason: '第 ${item.periodNumber} 期');
       }
       expect((await loans.findById(loan.id))!.status, 'settled');
 
@@ -188,11 +189,16 @@ void main() {
       expect(summary.outstandingPrincipalCents, 0);
 
       final snapshot = await dashboard.compute();
-      expect(displayedDollars(snapshot.totalInterestReceivedCents), 6618);
+      expect(snapshot.totalReceivableCents, 0, reason: '結清後才可以是 0');
+      expect(
+        formatMoneyRounded(snapshot.totalInterestReceivedCents),
+        'NT\$6,619',
+      );
+      expect(snapshot.totalDisbursedCents, 10000000, reason: '撥出去就是撥出去了');
       expect(snapshot.totalOverdueCents, 0);
     });
 
-    test('第 9 步：逾期情境（補登 70 天前撥款）第 1、2 期逾期共 NT\$35,624', () async {
+    test('第 9 步：撥款日選 70 天前，第 1、2 期立刻逾期共 NT\$35,625', () async {
       final loan = await loans.registerLoan(
         borrowerId: 'qa-borrower',
         principalCents: 10000000,
@@ -203,6 +209,7 @@ void main() {
         tenorPeriods: 6,
         plannedDisbursementDate: DateTime.now(),
       );
+      // UI 的「確認撥款」對話框現在可以選過去的日期，走的就是這條路徑。
       await loans.confirmDisbursement(
         loan.id,
         at: DateTime.now().subtract(const Duration(days: 70)),
@@ -217,59 +224,49 @@ void main() {
 
       final snapshot = await dashboard.compute();
       expect(snapshot.totalOverdueCents, 3562499);
-      expect(displayedDollars(snapshot.totalOverdueCents), 35624);
-      expect(snapshot.totalReceivableCents, 3562499);
+      expect(formatMoneyRounded(snapshot.totalOverdueCents), 'NT\$35,625');
+      expect(formatMoney(snapshot.totalOverdueCents), 'NT\$35,624.99');
+      expect(snapshot.totalOutstandingPrincipalCents, 10000000);
+      expect(snapshot.totalUnpaidInterestCents, 437500);
+
+      // 逾期合計可以一鍵帶入，不必自己加兩期。
+      final suggestion = await loans.paymentSuggestion(loan.id);
+      expect(suggestion.overdueCents, 3562499);
     });
 
-    test('第 9 步（接續第 1～8 步）：載入範例資料後看板為 400,000 / 9,018 / 35,624', () async {
-      // 第 1～8 步：結清一筆 10 萬 EMI。
+    test('第 10 步（接續第 1～8 步）：載入範例資料後的看板合計', () async {
       final loan = await registerQaLoan();
       await loans.confirmDisbursement(loan.id);
+      final payoff = (await loans.paymentSuggestion(loan.id)).payoffCents;
       await loans.recordPayment(
         loanId: loan.id,
-        amountCents: 8884 * 100,
-        paidAt: DateTime.now(),
-      );
-      await loans.recordPayment(
-        loanId: loan.id,
-        amountCents: 100,
-        paidAt: DateTime.now(),
-      );
-      await loans.recordPayment(
-        loanId: loan.id,
-        amountCents: 9773353,
+        amountCents: payoff,
         paidAt: DateTime.now(),
       );
       expect((await loans.findById(loan.id))!.status, 'settled');
 
-      // 第 9 步：載入範例資料。範例借款人的身分證必須與 MANUAL-QA 第 2 步
-      // 使用的 A123456789 不同，否則查重會擋下、整個載入中途失敗。
+      // 範例借款人的身分證必須與 MANUAL-QA 第 2 步使用的 A123456789 不同，
+      // 否則查重會擋下、整個載入中途失敗。
       await seedDemoData(
         borrowers: BorrowerRepository(db, PiiCodec.fromPassphrase('qa')),
         loans: loans,
       );
-
-      expect((await loans.listAll()), hasLength(3));
-
-      final snapshot = await dashboard.compute();
-      // 已結清的貸款仍計入撥款總額：撥出去的錢不會因為收回來就沒發生過。
-      expect(displayedDollars(snapshot.totalDisbursedCents), 400000);
-      expect(displayedDollars(snapshot.totalInterestReceivedCents), 9018);
-      expect(displayedDollars(snapshot.totalReceivableCents), 35624);
-      expect(displayedDollars(snapshot.totalOverdueCents), 35624);
-    });
-
-    test('已知缺陷（文件「還不能封測」第 2 項）：撥款後待收金額仍顯示 0', () async {
-      // 借款人實際還欠 100,000 元本金＋利息，但因為第 1 期到期日在 30 天後，
-      // 「待收金額」的定義（已出帳未收）讓看板顯示 NT$0。
-      // 這個斷言存在的目的不是宣告行為正確，而是把已知的誤導行為釘住：
-      // 哪天定義改了，這裡會失敗，提醒同步更新 MANUAL-QA.md 與看板說明。
-      final loan = await registerQaLoan();
-      await loans.confirmDisbursement(loan.id);
+      expect(await loans.listAll(), hasLength(3));
 
       final snapshot = await dashboard.compute();
-      expect(displayedDollars(snapshot.totalDisbursedCents), 100000);
-      expect(snapshot.totalReceivableCents, 0);
+      // 累計撥款 = 已結清的 10 萬 + 範例的 20 萬 + 10 萬。
+      expect(formatMoneyRounded(snapshot.totalDisbursedCents), 'NT\$400,000');
+      // 在貸本金只算沒收回來的：結清那筆已歸零。
+      expect(
+        snapshot.totalOutstandingPrincipalCents,
+        20000000 - 1559509 + 10000000,
+      );
+      expect(formatMoneyRounded(snapshot.totalOverdueCents), 'NT\$35,625');
+      expect(
+        snapshot.totalReceivableCents,
+        snapshot.totalOutstandingPrincipalCents +
+            snapshot.totalUnpaidInterestCents,
+      );
     });
   });
 }
