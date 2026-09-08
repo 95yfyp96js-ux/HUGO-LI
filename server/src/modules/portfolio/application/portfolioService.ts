@@ -133,6 +133,12 @@ export class PortfolioService {
       ["CREATED", "APPROVED", "READY_FOR_DISBURSEMENT"].includes(l.status)
     ).length;
 
+    // A loan sitting here has a payout that may be in flight (§P6): the
+    // morning briefing surfaces it as its own count rather than folding it
+    // into "pending disbursement", since it needs a different response —
+    // reconciliation, not action.
+    const disbursingCount = loans.filter((l) => l.status === "DISBURSING").length;
+
     const pendingApprovalCount = await this.db.lendingApplication.count({
       where: { status: { in: ["SUBMITTED", "UNDER_REVIEW", "RISK_REVIEW"] } },
     });
@@ -157,6 +163,7 @@ export class PortfolioService {
       dueTodayAmount: dueTodayAmount.toMajorUnitsString(),
       pendingApprovalCount,
       pendingDisbursementCount,
+      disbursingCount,
       todayDisbursement: Money.sum(
         todayDisbursements.map((d) => Money.fromMinorUnits(d.amountCents))
       ).toMajorUnitsString(),

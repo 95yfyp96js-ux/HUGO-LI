@@ -660,12 +660,20 @@ export function createRoutes(
     "/dashboard",
     requirePermission("LOAN_READ"),
     asyncHandler(async (_req, res) => {
-      const [summary, byGrade, collections] = await Promise.all([
+      const [summary, byGrade, collections, dailyClose] = await Promise.all([
         container.portfolio.summary(),
         container.portfolio.byRiskGrade(),
         container.collections.dashboard(),
+        // Today in Asia/Taipei, same figures the 早會 KPIs and the 今日應收
+        // page's day-close are built from — one calculation, never two.
+        container.payments.dueOn(),
       ]);
-      res.json({ summary, byRiskGrade: byGrade, collections });
+      res.json({
+        summary,
+        byRiskGrade: byGrade,
+        collections,
+        dailyClose: { date: dailyClose.date, ...dailyClose.summary },
+      });
     })
   );
 

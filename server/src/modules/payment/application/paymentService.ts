@@ -8,6 +8,7 @@ import {
   isUniqueConstraintViolation,
 } from "../../../shared/errors.js";
 import { formatSequenceNumber } from "../../../shared/ids.js";
+import { resolveTaipeiDay, isBeforeTaipeiDay } from "../../../shared/taipeiDay.js";
 import type { Clock } from "../../../shared/clock.js";
 import type { AuditContext, AuditService } from "../../audit/application/auditService.js";
 import { AllocationEngine } from "../domain/allocationEngine.js";
@@ -279,7 +280,7 @@ export class PaymentService {
         },
       });
 
-      await this.applyToSchedule(tx, loan.id, allocation);
+      await this.applyToSchedule(tx, loan.id, created.id, allocation);
 
       const newBalance = {
         principal: outstanding.principal.subtract(allocation.principalAmount),
@@ -440,16 +441,47 @@ export class PaymentService {
    * injected Clock, independent of which day is being viewed — a line for
    * yesterday is 已逾期 whichever day you are looking at it from.
    */
+  /**
+   * The daily close (日結): 應收 / 實收 / 未收 for one Asia/Taipei calendar
+   * day, and the 早會 counts derived from the same figures. The definitions
+   * are locked and every word of them matters:
+   *
+   *   應收 — installments due that day that were not already fully collected
+   *          before the day started. A line paid off ON this day still
+   *          counts (it was open going into the day); a line already fully
+   *          paid on an earlier day does not (it was never this day's open
+   *          item).
+   *   實收 — money actually confirmed on that calendar day, full stop. A
+   *          payment collected today that pays down a DIFFERENT day's
+   *          installment still counts here — it does not care what the
+   *          money was for, only when it landed. A reversed payment is
+   *          excluded by its own status; nothing here special-cases "same
+   *          day" reversal, because a reversed payment is simply not
+   *          CONFIRMED any more, on any day it is looked at from.
+   *   未收 — 應收 minus only the portion of today's money that was actually
+   *          allocated to today's due lines (via ScheduleLineAllocation).
+   *          Money collected today for a different day's installment does
+   *          NOT reduce today's 未收 — it was never aimed at today's
+   *          obligation, so today's obligation is not smaller for it.
+   *
+   * This is why per-line attribution has to be a real, persisted fact
+   * (ScheduleLineAllocation) rather than derived from ScheduleLine's running
+   * paid totals: those totals cannot say which day, or which day's
+   * obligation, a given payment's contribution belongs to.
+   */
   async dueOn(dateInput?: string) {
-    const reference = dateInput ? new Date(`${dateInput}T00:00:00.000Z`) : this.clock.now();
-    if (Number.isNaN(reference.getTime())) {
-      throw new ValidationError("date must be a valid calendar date (YYYY-MM-DD)", { date: dateInput });
+    let range;
+    try {
+      range = resolveTaipeiDay(dateInput, this.clock.now());
+    } catch (error) {
+      throw new ValidationError("date must be a valid calendar date (YYYY-MM-DD)", {
+        date: dateInput,
+        reason: error instanceof Error ? error.message : String(error),
+      });
     }
-    const dayStart = Date.UTC(reference.getUTCFullYear(), reference.getUTCMonth(), reference.getUTCDate());
-    const dayEnd = dayStart + 24 * 60 * 60 * 1000;
 
     const lines = await this.db.scheduleLine.findMany({
-      where: { dueDate: { gte: new Date(dayStart), lt: new Date(dayEnd) } },
+      where: { dueDate: { gte: range.start, lt: range.end } },
       orderBy: [{ dueDate: "asc" }, { installmentNumber: "asc" }],
       include: {
         loan: {
@@ -459,44 +491,70 @@ export class PaymentService {
             customer: { select: { id: true, name: true, customerNumber: true } },
           },
         },
+        paymentAllocations: {
+          include: { payment: { select: { paidAt: true, status: true } } },
+        },
       },
     });
 
-    const today = this.clock.now();
-    const todayStart = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+    const now = this.clock.now();
 
-    const items = lines
+    const rows = lines
       .map((line) => {
-        const totalDue = Money.fromMinorUnits(line.totalDueCents);
-        const totalPaid = Money.fromMinorUnits(
-          line.principalPaidCents + line.interestPaidCents + line.feePaidCents
+        const confirmed = line.paymentAllocations.filter((a) => a.payment.status === "CONFIRMED");
+        const sumCents = (list: typeof confirmed) =>
+          list.reduce((acc, a) => acc + a.principalAmountCents + a.interestAmountCents + a.feeAmountCents, 0);
+
+        const collectedBeforeDay = Money.fromMinorUnits(
+          sumCents(confirmed.filter((a) => a.payment.paidAt < range.start))
         );
-        const remaining = totalDue.subtract(totalPaid);
-        return { line, totalDue, totalPaid, remaining };
+        const dueAmount = Money.fromMinorUnits(line.totalDueCents);
+
+        // Already resolved on an earlier day: not this day's open item.
+        if (collectedBeforeDay.greaterThanOrEqual(dueAmount)) return null;
+
+        const collectedToday = Money.fromMinorUnits(
+          sumCents(confirmed.filter((a) => a.payment.paidAt >= range.start && a.payment.paidAt < range.end))
+        );
+        const uncollected = dueAmount.subtract(collectedToday);
+
+        return {
+          loanId: line.loan.id,
+          loanNumber: line.loan.loanNumber,
+          customerId: line.loan.customer.id,
+          customerName: line.loan.customer.name,
+          customerNumber: line.loan.customer.customerNumber,
+          installmentNumber: line.installmentNumber,
+          dueDate: line.dueDate,
+          dueAmount: dueAmount.toMajorUnitsString(),
+          collectedToday: collectedToday.toMajorUnitsString(),
+          uncollected: uncollected.toMajorUnitsString(),
+          status: isBeforeTaipeiDay(line.dueDate, now) ? ("OVERDUE" as const) : ("DUE_TODAY" as const),
+        };
       })
-      // "尚未收滿": a line already fully paid is not a receivable, even if it
-      // fell due today.
-      .filter(({ remaining }) => remaining.isPositive())
-      .map(({ line, totalDue, totalPaid, remaining }) => ({
-        loanId: line.loan.id,
-        loanNumber: line.loan.loanNumber,
-        customerId: line.loan.customer.id,
-        customerName: line.loan.customer.name,
-        customerNumber: line.loan.customer.customerNumber,
-        installmentNumber: line.installmentNumber,
-        dueDate: line.dueDate,
-        totalDue: totalDue.toMajorUnitsString(),
-        totalPaid: totalPaid.toMajorUnitsString(),
-        remaining: remaining.toMajorUnitsString(),
-        status: Date.UTC(line.dueDate.getUTCFullYear(), line.dueDate.getUTCMonth(), line.dueDate.getUTCDate()) < todayStart
-          ? ("OVERDUE" as const)
-          : ("DUE_TODAY" as const),
-      }));
+      .filter((row): row is NonNullable<typeof row> => row !== null);
+
+    // 實收 is payment-level, not line-level: it is every confirmed payment
+    // that landed on this day, regardless of which installment it paid down.
+    const dayPayments = await this.db.payment.findMany({
+      where: { status: "CONFIRMED", paidAt: { gte: range.start, lt: range.end } },
+      select: { amountCents: true },
+    });
+    const collectedAmount = Money.sum(dayPayments.map((p) => Money.fromMinorUnits(p.amountCents)));
+
+    const dueAmount = Money.sum(rows.map((r) => Money.fromMajorUnits(r.dueAmount)));
+    const uncollectedAmount = Money.sum(rows.map((r) => Money.fromMajorUnits(r.uncollected)));
 
     return {
-      date: new Date(dayStart).toISOString().slice(0, 10),
-      items,
-      totalRemaining: Money.sum(items.map((i) => Money.fromMajorUnits(i.remaining))).toMajorUnitsString(),
+      date: range.label,
+      items: rows,
+      summary: {
+        dueCount: rows.length,
+        dueAmount: dueAmount.toMajorUnitsString(),
+        collectedCount: dayPayments.length,
+        collectedAmount: collectedAmount.toMajorUnitsString(),
+        uncollectedAmount: uncollectedAmount.toMajorUnitsString(),
+      },
     };
   }
 
@@ -526,6 +584,7 @@ export class PaymentService {
   private async applyToSchedule(
     tx: Prisma.TransactionClient,
     loanId: string,
+    paymentId: string,
     allocation: { interestAmount: Money; feeAmount: Money; principalAmount: Money }
   ) {
     const lines = await tx.scheduleLine.findMany({
@@ -569,6 +628,21 @@ export class PaymentService {
           feePaidCents: feePaid,
           principalPaidCents: principalPaid,
           status: fullyPaid ? "PAID" : "PARTIALLY_PAID",
+        },
+      });
+
+      // The durable, per-installment record of what this specific payment did
+      // — ScheduleLine's own paidCents columns are only a running total and
+      // cannot say which day a given cent arrived on, which the daily close
+      // needs. Written once here and never edited; a later reversal is
+      // excluded by the payment's own status, not by touching this row.
+      await tx.scheduleLineAllocation.create({
+        data: {
+          paymentId,
+          scheduleLineId: line.id,
+          principalAmountCents: principalPay.toMinorUnits(),
+          interestAmountCents: interestPay.toMinorUnits(),
+          feeAmountCents: feePay.toMinorUnits(),
         },
       });
     }

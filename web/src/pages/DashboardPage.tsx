@@ -16,6 +16,7 @@ interface DashboardResponse {
     dueTodayAmount: string;
     pendingApprovalCount: number;
     pendingDisbursementCount: number;
+    disbursingCount: number;
     todayDisbursement: string;
     todayCollection: string;
     monthDisbursement: string;
@@ -24,6 +25,14 @@ interface DashboardResponse {
     averageDaysLate: number;
     collectionRate: string;
     par: Record<string, string>;
+  };
+  dailyClose: {
+    date: string;
+    dueCount: number;
+    dueAmount: string;
+    collectedCount: number;
+    collectedAmount: string;
+    uncollectedAmount: string;
   };
   byRiskGrade: Array<{ grade: string; loanCount: number; outstanding: string }>;
   collections: {
@@ -46,7 +55,7 @@ export function DashboardPage() {
   if (error) return <ErrorBanner error={error} />;
   if (!data) return null;
 
-  const { summary, byRiskGrade, collections } = data;
+  const { summary, byRiskGrade, collections, dailyClose } = data;
 
   return (
     <div>
@@ -64,6 +73,53 @@ export function DashboardPage() {
           </>
         }
       />
+
+      <section className="mb-6">
+        <h2 className="mb-3 text-sm font-semibold text-slate-700">
+          早會 · {dailyClose.date}（Asia/Taipei 日結）
+        </h2>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+          <KpiCard
+            label="今日應收"
+            value={money(dailyClose.dueAmount)}
+            sub={`${dailyClose.dueCount} 筆`}
+            to="/payments/due-today"
+            tone="warning"
+          />
+          <KpiCard
+            label="今日未收"
+            value={money(dailyClose.uncollectedAmount)}
+            to="/payments/due-today"
+            tone="danger"
+          />
+          <KpiCard
+            label="今日實收"
+            value={money(dailyClose.collectedAmount)}
+            sub={`${dailyClose.collectedCount} 筆`}
+            to="/payments"
+            tone="success"
+          />
+          <KpiCard
+            label="逾期件數"
+            value={String(summary.overdueLoanCount)}
+            sub="件"
+            to="/loans/overdue"
+            tone="danger"
+          />
+          <KpiCard
+            label="待撥件數"
+            value={String(summary.pendingDisbursementCount)}
+            sub="件"
+            to="/loans/pending-disbursement"
+          />
+          <KpiCard
+            label="撥款處理中"
+            value={String(summary.disbursingCount)}
+            sub="DISBURSING"
+            to="/loans/pending-disbursement"
+          />
+        </div>
+      </section>
 
       <section className="mb-6">
         <h2 className="mb-3 text-sm font-semibold text-slate-700">今日營運</h2>

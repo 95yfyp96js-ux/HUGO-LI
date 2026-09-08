@@ -389,6 +389,12 @@ model ScheduleLine {
   feePaidCents       Int      @default(0)
   status             String   @default("PENDING") // PENDING | PARTIALLY_PAID | PAID | OVERDUE
 
+  // Durable record of which payment funded how much of this installment, and
+  // when. Without this, ScheduleLine.paidCents is only a running total — it
+  // cannot say whether a given cent arrived today or three weeks ago, which
+  // the daily close (今日應收/實收/未收) needs to answer precisely.
+  paymentAllocations ScheduleLineAllocation[]
+
   @@unique([loanId, installmentNumber])
   @@index([loanId, dueDate])
 }
@@ -426,6 +432,7 @@ model Payment {
   createdAt      DateTime @default(now())
 
   allocations PaymentAllocation[]
+  scheduleLineAllocations ScheduleLineAllocation[]
 
   @@index([loanId])
 }
@@ -437,6 +444,29 @@ model PaymentAllocation {
   principalAmountCents Int
   interestAmountCents  Int
   feeAmountCents       Int
+}
+
+// One row per (payment, installment) touched by that payment's allocation.
+// PaymentAllocation above is the payment's own principal/interest/fee split;
+// this is the same split broken down per ScheduleLine, which is what lets
+// the daily close attribute "how much of today's money paid down today's due
+// installments" versus an older or future one. Written once, at apply time,
+// and never adjusted afterwards — a reversal is excluded by the reversed
+// payment's own status, not by editing these rows (§74.12: history is added
+// to, never rewritten).
+model ScheduleLineAllocation {
+  id                   String       @id @default(uuid())
+  paymentId            String
+  payment              Payment      @relation(fields: [paymentId], references: [id])
+  scheduleLineId       String
+  scheduleLine         ScheduleLine @relation(fields: [scheduleLineId], references: [id])
+  principalAmountCents Int
+  interestAmountCents  Int
+  feeAmountCents       Int
+  createdAt            DateTime     @default(now())
+
+  @@index([scheduleLineId])
+  @@index([paymentId])
 }
 
 // Append-only financial ledger. Never DELETE or mutate; a reversal is a new

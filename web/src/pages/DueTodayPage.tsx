@@ -14,16 +14,22 @@ interface DueTodayItem {
   customerNumber: string;
   installmentNumber: number;
   dueDate: string;
-  totalDue: string;
-  totalPaid: string;
-  remaining: string;
+  dueAmount: string;
+  collectedToday: string;
+  uncollected: string;
   status: "OVERDUE" | "DUE_TODAY";
 }
 
 interface DueTodayResponse {
   date: string;
   items: DueTodayItem[];
-  totalRemaining: string;
+  summary: {
+    dueCount: number;
+    dueAmount: string;
+    collectedCount: number;
+    collectedAmount: string;
+    uncollectedAmount: string;
+  };
 }
 
 function todayString(): string {
@@ -31,10 +37,16 @@ function todayString(): string {
 }
 
 /**
- * 今日應收: schedule lines due on one calendar day that are not yet fully
- * collected. Switching the date shows only that day's installments — it is
- * not a running total of everything unpaid up to it. All numbers come
- * straight from the server; nothing here is recomputed client-side.
+ * 今日應收（日結）: the day's close for one Asia/Taipei calendar day.
+ *
+ * 應收 is installments due that day that were not already fully collected on
+ * an earlier day. 實收 is every confirmed payment that landed that day,
+ * whatever it paid down — a payment collected today for a different day's
+ * installment still counts here. 未收 is 應收 minus only the part of today's
+ * money that actually went toward today's due installments; money collected
+ * today for some other day's installment does not shrink today's 未收.
+ *
+ * Every number comes from the server; nothing here is recomputed.
  */
 export function DueTodayPage() {
   const { can } = useAuth();
@@ -47,7 +59,7 @@ export function DueTodayPage() {
 
   return (
     <div>
-      <PageHeader title="今日應收" subtitle="依到期日列出當天尚未收滿的期數，資料以後端為準" />
+      <PageHeader title="今日應收" subtitle="依 Asia/Taipei 日界結算：應收／實收／未收，資料以後端為準" />
 
       <div className="card mb-4 flex flex-wrap items-end gap-3 p-4">
         <div>
@@ -63,12 +75,33 @@ export function DueTodayPage() {
         <button className="btn-secondary" onClick={() => setSelectedDate(todayString())}>
           回到今天
         </button>
-        {data && (
-          <div className="ml-auto text-sm text-slate-500">
-            {data.items.length} 筆待收 ・ 合計未收 <span className="tabular font-medium text-slate-900">{money(data.totalRemaining)}</span>
-          </div>
-        )}
       </div>
+
+      {data && (
+        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
+          <div className="card p-4">
+            <dt className="text-xs font-medium text-slate-500">應收</dt>
+            <dd className="tabular mt-1 text-xl font-semibold text-slate-900">
+              {money(data.summary.dueAmount)}
+            </dd>
+            <p className="mt-1 text-xs text-slate-400">{data.summary.dueCount} 筆到期</p>
+          </div>
+          <div className="card p-4">
+            <dt className="text-xs font-medium text-emerald-700">實收</dt>
+            <dd className="tabular mt-1 text-xl font-semibold text-emerald-700">
+              {money(data.summary.collectedAmount)}
+            </dd>
+            <p className="mt-1 text-xs text-slate-400">{data.summary.collectedCount} 筆入帳</p>
+          </div>
+          <div className="card p-4">
+            <dt className="text-xs font-medium text-rose-700">未收</dt>
+            <dd className="tabular mt-1 text-xl font-semibold text-rose-700">
+              {money(data.summary.uncollectedAmount)}
+            </dd>
+            <p className="mt-1 text-xs text-slate-400">當日應收扣除當日已分攤實收</p>
+          </div>
+        </div>
+      )}
 
       <ErrorBanner error={error} />
       {isLoading ? (
@@ -77,7 +110,7 @@ export function DueTodayPage() {
         <DataTable
           rows={data?.items ?? []}
           rowKey={(row) => `${row.loanId}-${row.installmentNumber}`}
-          empty="這一天沒有尚未收滿的期數"
+          empty="這一天沒有到期的期數"
           columns={[
             {
               header: "客戶",
@@ -96,11 +129,14 @@ export function DueTodayPage() {
               ),
             },
             { header: "到期日", cell: (row) => date(row.dueDate) },
-            { header: "應收", cell: (row) => <span className="tabular">{money(row.totalDue)}</span> },
-            { header: "已收", cell: (row) => <span className="tabular">{money(row.totalPaid)}</span> },
+            { header: "應收", cell: (row) => <span className="tabular">{money(row.dueAmount)}</span> },
+            {
+              header: "實收",
+              cell: (row) => <span className="tabular text-emerald-700">{money(row.collectedToday)}</span>,
+            },
             {
               header: "未收",
-              cell: (row) => <span className="tabular font-medium">{money(row.remaining)}</span>,
+              cell: (row) => <span className="tabular font-medium">{money(row.uncollected)}</span>,
             },
             {
               header: "狀態",
