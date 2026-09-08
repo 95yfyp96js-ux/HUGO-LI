@@ -54,7 +54,7 @@ describe("schema portability", () => {
     // balance — every amount goes through Money.
     for (const { model, line } of floats) {
       expect(line, `${model}: ${line}`).toMatch(
-        /^(ratePercent|approvedRatePercent|maxMonthlyRatePercent)\s/
+        /^(ratePercent|approvedRatePercent|maxMonthlyRatePercent|overdueRatePercent)\s/
       );
     }
   });

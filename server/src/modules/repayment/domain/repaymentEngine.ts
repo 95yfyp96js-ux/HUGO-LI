@@ -1,8 +1,15 @@
+import { Decimal } from "decimal.js";
 import { Money } from "../../../shared/money.js";
 import { InterestEngine, type RateUnit } from "./interestEngine.js";
 import { ScheduleCalculationFailedError } from "../../../shared/errors.js";
 
-export type RepaymentMethod = "INTEREST_ONLY" | "PRINCIPAL_AND_INTEREST" | "PRINCIPAL_ONLY" | "BULLET" | "CUSTOM";
+export type RepaymentMethod =
+  | "INTEREST_ONLY"
+  | "PRINCIPAL_AND_INTEREST"
+  | "EQUAL_INSTALLMENT"
+  | "PRINCIPAL_ONLY"
+  | "BULLET"
+  | "CUSTOM";
 
 /** What a term is counted in. One installment covers exactly one of these. */
 export type TermUnit = "DAY" | "MONTH";
@@ -105,6 +112,8 @@ export const RepaymentEngine = {
         return interestOnlySchedule(input);
       case "PRINCIPAL_AND_INTEREST":
         return principalAndInterestSchedule(input);
+      case "EQUAL_INSTALLMENT":
+        return equalInstallmentSchedule(input);
       case "PRINCIPAL_ONLY":
         return principalOnlySchedule(input);
       case "BULLET":
@@ -172,6 +181,58 @@ function principalAndInterestSchedule(input: RepaymentScheduleInput): LoanSchedu
 
 function roundPrincipalShare(principal: Money, termCount: number): Money {
   return Money.fromMinorUnits(Math.floor(principal.toMinorUnits() / termCount));
+}
+
+/**
+ * Equal total payment per installment (等額本息 / French amortization):
+ * principal + interest is level across periods, interest computed on the
+ * declining balance via the same InterestEngine.calculateForPeriodRate every
+ * other method uses, so only the payment split is new here — not the
+ * interest math itself.
+ *
+ * payment = principal * r / (1 - (1+r)^-n), or principal / n when r is 0.
+ * The last installment absorbs whatever the cent has left over, the same
+ * convention principalAndInterestSchedule uses, so the balance always
+ * reaches exactly zero.
+ */
+function equalInstallmentSchedule(input: RepaymentScheduleInput): LoanSchedule {
+  const { rate, unit } = periodTerms(input);
+  const r = new Decimal(rate).dividedBy(100);
+  const n = input.termCount;
+
+  const payment: Money = r.isZero()
+    ? Money.fromMinorUnits(Math.floor(input.principal.toMinorUnits() / n))
+    : input.principal.multiply(r.dividedBy(new Decimal(1).minus(new Decimal(1).plus(r).pow(-n))));
+
+  const installments: ScheduleInstallment[] = [];
+  let allocatedPrincipal = Money.zero();
+  let remainingBalance = input.principal;
+
+  for (let k = 1; k <= n; k++) {
+    const isLast = k === n;
+    const interestDue = InterestEngine.calculateForPeriodRate(remainingBalance, rate);
+
+    let principalDue: Money;
+    if (isLast) {
+      principalDue = input.principal.subtract(allocatedPrincipal);
+    } else {
+      principalDue = payment.subtract(interestDue);
+      if (principalDue.isNegative()) principalDue = Money.zero();
+      if (principalDue.greaterThan(remainingBalance)) principalDue = remainingBalance;
+    }
+
+    allocatedPrincipal = allocatedPrincipal.add(principalDue);
+    remainingBalance = remainingBalance.subtract(principalDue);
+
+    installments.push({
+      installmentNumber: k,
+      dueDate: addPeriods(input.startDate, k, unit),
+      principalDue,
+      interestDue,
+      feeDue: Money.zero(),
+    });
+  }
+  return summarize(installments);
 }
 
 /** No interest component; used for principal-only side arrangements. */

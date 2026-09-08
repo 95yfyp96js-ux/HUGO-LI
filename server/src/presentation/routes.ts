@@ -306,6 +306,26 @@ export function createRoutes(
     })
   );
 
+  // 一筆借據一張單 — freeform loan slip. Fuses creation and (the caller's
+  // subsequent /disburse call) into a single action with no separate
+  // approval step, so this is gated on LOAN_DISBURSE rather than
+  // LOAN_CREATE: only whoever could disburse anyway may originate money
+  // this way with nobody else signing off first.
+  router.post(
+    "/loans/slip",
+    financialLimit.middleware,
+    idempotency.middleware,
+    requirePermission("LOAN_DISBURSE"),
+    asyncHandler(async (req, res) => {
+      const idempotencyKey = requireIdempotencyKey(req);
+      const result = await container.loans.issueLoanSlip(
+        { ...req.body, idempotencyKey },
+        auditContext(req)
+      );
+      res.status(result.replayed ? 200 : 201).json(result);
+    })
+  );
+
   router.get(
     "/loans/:id",
     requirePermission("LOAN_READ"),
@@ -334,6 +354,29 @@ export function createRoutes(
           ).toMajorUnitsString(),
         })),
       });
+    })
+  );
+
+  // 回款確認 — confirms exactly one installment, not a free amount cascaded
+  // oldest-first. Same idempotency contract as /payments.
+  router.post(
+    "/loans/:id/installments/:number/confirm",
+    financialLimit.middleware,
+    idempotency.middleware,
+    requirePermission("PAYMENT_CREATE"),
+    asyncHandler(async (req, res) => {
+      const idempotencyKey = requireIdempotencyKey(req);
+      const installmentNumber = Number(req.params.number);
+      if (!Number.isInteger(installmentNumber) || installmentNumber <= 0) {
+        throw new ValidationError("installment number must be a positive integer");
+      }
+      const result = await container.payments.confirmInstallment(
+        req.params.id!,
+        installmentNumber,
+        { idempotencyKey },
+        auditContext(req)
+      );
+      res.status(result.replayed ? 200 : 201).json(result);
     })
   );
 
@@ -516,6 +559,31 @@ export function createRoutes(
       // A BOM so Excel on Windows opens the UTF-8 Chinese headers correctly
       // instead of guessing a legacy encoding.
       res.send("﻿" + csv);
+    })
+  );
+
+  // 催款日程表 — every unpaid installment due in [from, to].
+  router.get(
+    "/payments/schedule",
+    requirePermission("PAYMENT_READ"),
+    asyncHandler(async (req, res) => {
+      res.json(
+        await container.payments.unpaidInstallments({
+          from: req.query.from as string | undefined,
+          to: req.query.to as string | undefined,
+        })
+      );
+    })
+  );
+
+  // 月曆 — per-day unpaid-installment counts/amounts for one month, built
+  // from the exact same data /payments/schedule reads, so a calendar day's
+  // count and its drill-down list can never disagree.
+  router.get(
+    "/payments/calendar",
+    requirePermission("PAYMENT_READ"),
+    asyncHandler(async (req, res) => {
+      res.json(await container.payments.calendarSummary(req.query.month as string | undefined));
     })
   );
 

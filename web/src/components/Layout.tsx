@@ -26,6 +26,7 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { to: "/customers", label: "客戶", icon: "👤", permission: "CUSTOMER_READ" },
       { to: "/lending/applications", label: "放款申請", icon: "📄", permission: "APPLICATION_READ" },
+      { to: "/loans/new-slip", label: "放款單", icon: "📝", permission: "LOAN_DISBURSE" },
       { to: "/loans", label: "放款帳戶", icon: "💰", permission: "LOAN_READ" },
       { to: "/loans/pending-disbursement", label: "待撥款", icon: "🏦", permission: "LOAN_READ" },
       { to: "/loans/overdue", label: "逾期管理", icon: "⚠️", permission: "LOAN_READ" },
@@ -36,6 +37,8 @@ const NAV_SECTIONS: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { to: "/payments/due-today", label: "今日應收", icon: "📅", permission: "PAYMENT_READ" },
       { to: "/payments", label: "收款紀錄", icon: "🧾", permission: "PAYMENT_READ" },
+      { to: "/collections/schedule", label: "催款日程表", icon: "🗓", permission: "PAYMENT_READ" },
+      { to: "/calendar", label: "月曆", icon: "📆", permission: "PAYMENT_READ" },
       { to: "/collections", label: "催收", icon: "📞", permission: "COLLECTION_READ" },
       { to: "/renewals", label: "續借紀錄", icon: "🔁", permission: "LOAN_READ" },
       { to: "/reports", label: "報表", icon: "📊", permission: "LOAN_READ" },

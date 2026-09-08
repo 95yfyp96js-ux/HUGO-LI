@@ -68,6 +68,13 @@ export class RenewalService {
     if (!previous.snapshot) {
       throw new ValidationError("Loan has no snapshot and cannot be renewed", { loanId });
     }
+    // A freeform loan slip (§ loan slip) may have no template product at
+    // all. Re-underwriting below prices the renewal against a product, so
+    // there is nothing correct to do here yet — refuse explicitly rather
+    // than crash on a null product lookup.
+    if (!previous.productId) {
+      throw new ValidationError("此借款無對應產品範本，暫不支援續借", { loanId });
+    }
 
     const carriedBalance = Money.fromMinorUnits(
       previous.outstandingPrincipalCents + previous.outstandingInterestCents + previous.outstandingFeeCents

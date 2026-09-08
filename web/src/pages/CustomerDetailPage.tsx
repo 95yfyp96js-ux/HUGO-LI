@@ -39,7 +39,7 @@ interface Customer360 {
     status: string;
     requestedAmount: string;
     requestedTermCount: number;
-    productName: string;
+    productName: string | null;
     createdAt: string;
   }>;
   loans: Array<{
@@ -262,7 +262,7 @@ export function CustomerDetailPage() {
                 </Link>
               ),
             },
-            { header: "產品", cell: (row) => row.productName },
+            { header: "產品", cell: (row) => row.productName ?? "（無範本，放款單）" },
             { header: "申請金額", cell: (row) => <Money value={row.requestedAmount} />, className: "text-right" },
             { header: "期數", cell: (row) => `${row.requestedTermCount} 期` },
             { header: "狀態", cell: (row) => <StatusBadge status={row.status} kind="application" /> },

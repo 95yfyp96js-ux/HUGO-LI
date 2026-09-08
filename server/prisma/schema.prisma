@@ -18,14 +18,14 @@ datasource db {
 // ---------------------------------------------------------------------------
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
+  id           String     @id @default(uuid())
+  email        String     @unique
   displayName  String
   passwordHash String
-  status       String   @default("ACTIVE") // ACTIVE | DISABLED
+  status       String     @default("ACTIVE") // ACTIVE | DISABLED
   roles        UserRole[]
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
   auditLogs        AuditLog[]
   createdCustomers Customer[]       @relation("CustomerCreatedBy")
@@ -59,8 +59,8 @@ model RolePermission {
 model UserRole {
   userId String
   roleId String
-  user   User @relation(fields: [userId], references: [id])
-  role   Role @relation(fields: [roleId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+  role   Role   @relation(fields: [roleId], references: [id])
 
   @@id([userId, roleId])
 }
@@ -113,20 +113,27 @@ model CustomerNote {
 // ---------------------------------------------------------------------------
 
 model LendingApplication {
-  id                   String   @id @default(uuid())
-  applicationNumber    String   @unique
+  id                   String       @id @default(uuid())
+  applicationNumber    String       @unique
   customerId           String
-  customer             Customer @relation(fields: [customerId], references: [id])
-  requestedProductId   String
-  requestedProduct     LoanProduct @relation(fields: [requestedProductId], references: [id])
+  customer             Customer     @relation(fields: [customerId], references: [id])
+  // Null for a freeform loan slip (§ loan slip): a product there is only a
+  // template the officer may prefill from, never a requirement.
+  requestedProductId   String?
+  requestedProduct     LoanProduct? @relation(fields: [requestedProductId], references: [id])
   requestedAmountCents Int
-  requestedTermCount  Int
+  requestedTermCount   Int
   purpose              String?
   incomeCents          Int?
   existingDebtCents    Int?
-  status               String   @default("DRAFT") // DRAFT | SUBMITTED | UNDER_REVIEW | RISK_REVIEW | APPROVED | REJECTED | CANCELLED | EXPIRED
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  status               String       @default("DRAFT") // DRAFT | SUBMITTED | UNDER_REVIEW | RISK_REVIEW | APPROVED | REJECTED | CANCELLED | EXPIRED
+  // Set only when this application was created by the loan-slip fast path
+  // (issueLoanSlip), so a retried submit can be recognised and replayed
+  // instead of writing a second loan. Null for every normally-underwritten
+  // application.
+  slipIdempotencyKey   String?      @unique
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
 
   riskAssessments RiskAssessment[]
   lendingLimits   LendingLimit[]
@@ -153,7 +160,7 @@ model RiskAssessment {
   decision      String // AUTO_APPROVE | REVIEW_REQUIRED | HIGH_RISK | REJECT
   reasons       String // JSON-encoded string[]
   modelVersion  String
-  createdAt     DateTime @default(now())
+  createdAt     DateTime            @default(now())
 
   factors RiskFactor[]
 
@@ -176,20 +183,20 @@ model RiskFactor {
 // ---------------------------------------------------------------------------
 
 model LendingLimit {
-  id                   String   @id @default(uuid())
-  customerId           String
-  customer             Customer @relation(fields: [customerId], references: [id])
-  applicationId        String?
-  application          LendingApplication? @relation(fields: [applicationId], references: [id])
-  maximumLimitCents    Int
-  currentExposureCents Int
-  availableLimitCents  Int
-  requestedAmountCents Int
+  id                     String              @id @default(uuid())
+  customerId             String
+  customer               Customer            @relation(fields: [customerId], references: [id])
+  applicationId          String?
+  application            LendingApplication? @relation(fields: [applicationId], references: [id])
+  maximumLimitCents      Int
+  currentExposureCents   Int
+  availableLimitCents    Int
+  requestedAmountCents   Int
   recommendedAmountCents Int
-  decision             String // LIMIT_AVAILABLE | LIMIT_EXCEEDED
-  reasons              String @default("[]")
-  engineVersion        String
-  createdAt            DateTime @default(now())
+  decision               String // LIMIT_AVAILABLE | LIMIT_EXCEEDED
+  reasons                String              @default("[]")
+  engineVersion          String
+  createdAt              DateTime            @default(now())
 
   @@index([customerId])
 }
@@ -205,8 +212,8 @@ model LoanProduct {
   description       String?
   minAmountCents    Int
   maxAmountCents    Int
-  minTermCount     Int
-  maxTermCount     Int
+  minTermCount      Int
+  maxTermCount      Int
   // What minTermCount/maxTermCount are counted in. A term of "7" means seven
   // days under DAY and seven months under MONTH, and the rate period is
   // converted to match, so a daily-rate product and a monthly-rate product
@@ -232,24 +239,24 @@ model LoanProduct {
 }
 
 model LoanOffer {
-  id                 String             @id @default(uuid())
-  applicationId      String
-  application        LendingApplication @relation(fields: [applicationId], references: [id])
-  productId          String
-  product            LoanProduct        @relation(fields: [productId], references: [id])
+  id                  String             @id @default(uuid())
+  applicationId       String
+  application         LendingApplication @relation(fields: [applicationId], references: [id])
+  productId           String
+  product             LoanProduct        @relation(fields: [productId], references: [id])
   approvedAmountCents Int
-  ratePercent        Float
-  rateUnit           String
-  calculationMethod  String
-  termCount          Int
-  termUnit           String   @default("MONTH") // DAY | MONTH
-  feesCents          Int
-  repaymentMethod    String
-  settlementPolicy   String   @default("FULL_CONTRACT_INTEREST")
-  totalInterestCents Int
-  totalPayableCents  Int
-  pricingVersion     String
-  createdAt          DateTime @default(now())
+  ratePercent         Float
+  rateUnit            String
+  calculationMethod   String
+  termCount           Int
+  termUnit            String             @default("MONTH") // DAY | MONTH
+  feesCents           Int
+  repaymentMethod     String
+  settlementPolicy    String             @default("FULL_CONTRACT_INTEREST")
+  totalInterestCents  Int
+  totalPayableCents   Int
+  pricingVersion      String
+  createdAt           DateTime           @default(now())
 
   approvals LoanApproval[]
 }
@@ -259,20 +266,20 @@ model LoanOffer {
 // ---------------------------------------------------------------------------
 
 model LoanApproval {
-  id                 String             @id @default(uuid())
-  applicationId      String
-  application        LendingApplication @relation(fields: [applicationId], references: [id])
-  loanOfferId        String?
-  loanOffer          LoanOffer?         @relation(fields: [loanOfferId], references: [id])
-  decision           String // PENDING | APPROVED | REJECTED | CONDITIONAL
+  id                  String             @id @default(uuid())
+  applicationId       String
+  application         LendingApplication @relation(fields: [applicationId], references: [id])
+  loanOfferId         String?
+  loanOffer           LoanOffer?         @relation(fields: [loanOfferId], references: [id])
+  decision            String // PENDING | APPROVED | REJECTED | CONDITIONAL
   approvedAmountCents Int?
-  approvedTermCount Int?
+  approvedTermCount   Int?
   approvedRatePercent Float?
-  conditions         String  @default("[]") // JSON-encoded ApprovalCondition[]
-  reason             String?
-  approvedBy         String?
-  approvedAt         DateTime?
-  createdAt          DateTime @default(now())
+  conditions          String             @default("[]") // JSON-encoded ApprovalCondition[]
+  reason              String?
+  approvedBy          String?
+  approvedAt          DateTime?
+  createdAt           DateTime           @default(now())
 
   @@index([applicationId])
 }
@@ -282,32 +289,33 @@ model LoanApproval {
 // ---------------------------------------------------------------------------
 
 model Loan {
-  id                        String   @id @default(uuid())
-  loanNumber                String   @unique
+  id                        String             @id @default(uuid())
+  loanNumber                String             @unique
   customerId                String
-  customer                  Customer @relation(fields: [customerId], references: [id])
-  applicationId             String   @unique
+  customer                  Customer           @relation(fields: [customerId], references: [id])
+  applicationId             String             @unique
   application               LendingApplication @relation(fields: [applicationId], references: [id])
-  productId                 String
+  // Null for a freeform loan slip with no template product.
+  productId                 String?
   principalCents            Int
   outstandingPrincipalCents Int
   outstandingInterestCents  Int
-  outstandingFeeCents       Int      @default(0)
-  status                    String   @default("CREATED")
+  outstandingFeeCents       Int                @default(0)
+  status                    String             @default("CREATED")
   startDate                 DateTime?
   maturityDate              DateTime?
-  createdAt                 DateTime @default(now())
-  updatedAt                 DateTime @updatedAt
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
 
-  snapshot        LoanSnapshot?
-  disbursements   Disbursement[]
-  scheduleLines   ScheduleLine[]
-  payments        Payment[]
-  moneyEvents     MoneyEvent[]
+  snapshot         LoanSnapshot?
+  disbursements    Disbursement[]
+  scheduleLines    ScheduleLine[]
+  payments         Payment[]
+  moneyEvents      MoneyEvent[]
   interestAccruals InterestAccrual[]
-  collectionCases CollectionCase[]
-  extensions      Extension[]
-  settlement      Settlement?
+  collectionCases  CollectionCase[]
+  extensions       Extension[]
+  settlement       Settlement?
 
   renewalsAsOriginal Renewal[] @relation("RenewalOriginal")
   renewalsAsPrevious Renewal[] @relation("RenewalPrevious")
@@ -331,12 +339,26 @@ model LoanSnapshot {
   termUnit              String   @default("MONTH") // DAY | MONTH
   repaymentMethod       String
   settlementPolicy      String   @default("FULL_CONTRACT_INTEREST")
-  productId             String
-  productVersion        Int
+  // Both null when the loan slip that created this loan named no template
+  // product; snapshotted like every other term here so a later repricing —
+  // or the template being deleted — cannot change what this loan agreed to.
+  productId             String?
+  productVersion        Int?
   feeRules              String
   pricingVersion        String
   riskAssessmentVersion String
   approvalVersion       String
+  // 逾期利率 (optional). Recorded on the slip for reference only — v1's
+  // OverdueEngine tracks delinquency status but does not accrue penalty
+  // interest, so this is not automatically applied to the balance.
+  overdueRatePercent    Float?
+  // POST_PAID (interest collected via the schedule, as every method already
+  // does) is the only value ever written. PRE_PAID (interest deducted from
+  // the amount disbursed) is a real option on the loan slip form but is
+  // rejected at input time — see LoanService.issueLoanSlip — because nothing
+  // in the disbursement or schedule engines implements it. The column exists
+  // so the limitation is visible in the data model, not silently absent.
+  interestTiming        String   @default("POST_PAID")
   createdAt             DateTime @default(now())
 
   adjustments LoanAdjustment[]
@@ -348,7 +370,7 @@ model LoanAdjustment {
   snapshot   LoanSnapshot @relation(fields: [snapshotId], references: [id])
   reason     String
   changes    String // JSON-encoded diff
-  createdAt  DateTime @default(now())
+  createdAt  DateTime     @default(now())
   createdBy  String
 }
 
@@ -431,7 +453,7 @@ model Payment {
   createdBy      String
   createdAt      DateTime @default(now())
 
-  allocations PaymentAllocation[]
+  allocations             PaymentAllocation[]
   scheduleLineAllocations ScheduleLineAllocation[]
 
   @@index([loanId])
@@ -525,7 +547,7 @@ model CollectionActivity {
   result           String?
   note             String?
   createdBy        String
-  createdAt        DateTime  @default(now())
+  createdAt        DateTime       @default(now())
   nextActionAt     DateTime?
 }
 
@@ -564,17 +586,17 @@ model Renewal {
 }
 
 model Extension {
-  id                  String   @id @default(uuid())
-  idempotencyKey      String?  @unique
-  loanId              String
-  loan                Loan     @relation(fields: [loanId], references: [id])
+  id                   String   @id @default(uuid())
+  idempotencyKey       String?  @unique
+  loanId               String
+  loan                 Loan     @relation(fields: [loanId], references: [id])
   previousMaturityDate DateTime
-  newMaturityDate     DateTime
-  extensionMonths     Int
-  feeCents            Int      @default(0)
-  reason              String
-  createdAt           DateTime @default(now())
-  createdBy           String
+  newMaturityDate      DateTime
+  extensionMonths      Int
+  feeCents             Int      @default(0)
+  reason               String
+  createdAt            DateTime @default(now())
+  createdBy            String
 
   @@index([loanId])
 }
@@ -639,7 +661,9 @@ model AuditLog {
 model IdempotencyRecord {
   key          String   @id
   endpoint     String
-  /** Hash of the request body, so the same key with different content is refused. */
+  /**
+   * Hash of the request body, so the same key with different content is refused.
+   */
   fingerprint  String   @default("")
   statusCode   Int      @default(200)
   responseBody String
@@ -657,10 +681,10 @@ model IdempotencyRecord {
 // periodRate conversion). Changing it never touches an existing LoanSnapshot
 // — it only gates what may be saved or approved from this point on.
 model ShopSettings {
-  id                     String   @id @default("default")
-  maxMonthlyRatePercent  Float?
-  updatedAt              DateTime @updatedAt
-  updatedBy              String?
+  id                    String   @id @default("default")
+  maxMonthlyRatePercent Float?
+  updatedAt             DateTime @updatedAt
+  updatedBy             String?
 }
 
 // ---------------------------------------------------------------------------

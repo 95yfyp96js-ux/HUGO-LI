@@ -12,6 +12,7 @@ import { NewApplicationPage } from "./pages/NewApplicationPage";
 import { ApplicationDetailPage } from "./pages/ApplicationDetailPage";
 import { LoansPage } from "./pages/LoansPage";
 import { NewLoanPage } from "./pages/NewLoanPage";
+import { NewLoanSlipPage } from "./pages/NewLoanSlipPage";
 import { LoanDetailPage } from "./pages/LoanDetailPage";
 import { PendingDisbursementPage } from "./pages/PendingDisbursementPage";
 import { OverdueLoansPage } from "./pages/OverdueLoansPage";
@@ -20,6 +21,8 @@ import { NewPaymentPage } from "./pages/NewPaymentPage";
 import { DueTodayPage } from "./pages/DueTodayPage";
 import { CollectionsPage } from "./pages/CollectionsPage";
 import { CollectionDetailPage } from "./pages/CollectionDetailPage";
+import { CollectionSchedulePage } from "./pages/CollectionSchedulePage";
+import { CalendarPage } from "./pages/CalendarPage";
 import { RenewalsPage } from "./pages/RenewalsPage";
 import { ProductsPage } from "./pages/ProductsPage";
 import { ProductDetailPage } from "./pages/ProductDetailPage";
@@ -66,6 +69,7 @@ export function App() {
         {/* Static loan routes must precede /loans/:id */}
         <Route path="/loans" element={<LoansPage />} />
         <Route path="/loans/new" element={<NewLoanPage />} />
+        <Route path="/loans/new-slip" element={<NewLoanSlipPage />} />
         <Route path="/loans/pending-disbursement" element={<PendingDisbursementPage />} />
         <Route path="/loans/overdue" element={<OverdueLoansPage />} />
         <Route path="/loans/:id" element={<LoanDetailPage />} />
@@ -75,7 +79,10 @@ export function App() {
         <Route path="/payments/due-today" element={<DueTodayPage />} />
 
         <Route path="/collections" element={<CollectionsPage />} />
+        <Route path="/collections/schedule" element={<CollectionSchedulePage />} />
         <Route path="/collections/:id" element={<CollectionDetailPage />} />
+
+        <Route path="/calendar" element={<CalendarPage />} />
 
         <Route path="/renewals" element={<RenewalsPage />} />
 

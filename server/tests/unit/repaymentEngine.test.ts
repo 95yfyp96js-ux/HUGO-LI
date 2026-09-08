@@ -91,6 +91,68 @@ describe("RepaymentEngine", () => {
     });
   });
 
+  describe("EQUAL_INSTALLMENT", () => {
+    const schedule = RepaymentEngine.generateSchedule({
+      principal: Money.fromMajorUnits(50000),
+      ratePercent: 2.5,
+      termCount: 3,
+      startDate: START,
+      repaymentMethod: "EQUAL_INSTALLMENT",
+    });
+
+    it("repays the full principal across the term with no cent lost to rounding", () => {
+      expect(schedule.totalPrincipal.toMajorUnitsString()).toBe("50000.00");
+    });
+
+    it("charges interest on the declining balance, same as PRINCIPAL_AND_INTEREST", () => {
+      const [first, second, third] = schedule.installments;
+      expect(first!.interestDue.toMajorUnitsString()).toBe("1250.00");
+      expect(first!.interestDue.greaterThan(second!.interestDue)).toBe(true);
+      expect(second!.interestDue.greaterThan(third!.interestDue)).toBe(true);
+    });
+
+    it("keeps the total payment level across installments (principal + interest constant)", () => {
+      const totals = schedule.installments.map((i) => i.principalDue.add(i.interestDue).toMinorUnits());
+      // Rounding can move the level payment by at most a cent between periods.
+      const [a, b, c] = totals;
+      expect(Math.abs(a! - b!)).toBeLessThanOrEqual(1);
+      expect(Math.abs(b! - c!)).toBeLessThanOrEqual(1);
+    });
+
+    it("grows the principal share of each payment as the balance declines", () => {
+      const [first, second, third] = schedule.installments;
+      expect(third!.principalDue.greaterThan(second!.principalDue)).toBe(true);
+      expect(second!.principalDue.greaterThan(first!.principalDue)).toBe(true);
+    });
+
+    it("costs less total interest than INTEREST_ONLY over the same term", () => {
+      const interestOnly = RepaymentEngine.generateSchedule({
+        principal: Money.fromMajorUnits(50000),
+        ratePercent: 2.5,
+        termCount: 3,
+        startDate: START,
+        repaymentMethod: "INTEREST_ONLY",
+      });
+      expect(schedule.totalInterest.lessThan(interestOnly.totalInterest)).toBe(true);
+    });
+
+    it("handles a zero rate as an equal principal split with no interest", () => {
+      const zeroRate = RepaymentEngine.generateSchedule({
+        principal: Money.fromMajorUnits(9000),
+        ratePercent: 0,
+        termCount: 3,
+        startDate: START,
+        repaymentMethod: "EQUAL_INSTALLMENT",
+      });
+      expect(zeroRate.totalInterest.isZero()).toBe(true);
+      expect(zeroRate.installments.map((i) => i.principalDue.toMajorUnitsString())).toEqual([
+        "3000.00",
+        "3000.00",
+        "3000.00",
+      ]);
+    });
+  });
+
   it("BULLET charges the whole term's interest in a single installment", () => {
     const schedule = RepaymentEngine.generateSchedule({
       principal: Money.fromMajorUnits(50000),

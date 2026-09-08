@@ -147,7 +147,7 @@ export class Customer360Service {
         status: a.status,
         requestedAmount: Money.fromMinorUnits(a.requestedAmountCents).toMajorUnitsString(),
         requestedTermCount: a.requestedTermCount,
-        productName: a.requestedProduct.name,
+        productName: a.requestedProduct?.name ?? null,
         createdAt: a.createdAt,
       })),
       loans: customer.loans.map((l, index) => ({

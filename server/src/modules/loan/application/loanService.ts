@@ -2,8 +2,10 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { Money } from "../../../shared/money.js";
 import {
   ApplicationNotFoundError,
+  CustomerNotFoundError,
   InvalidLoanStateError,
   LoanNotFoundError,
+  ProductNotFoundError,
   ValidationError,
 } from "../../../shared/errors.js";
 import { formatSequenceNumber } from "../../../shared/ids.js";
@@ -16,15 +18,84 @@ import { BalanceEngine, type LedgerEntry } from "../domain/balanceEngine.js";
 import { OverdueEngine } from "../domain/overdueEngine.js";
 import type { DisbursementProvider } from "../../disbursement/domain/disbursementProvider.js";
 import { assertDayOpen } from "../../shop/application/dailyCloseService.js";
+import type { ShopSettingsService } from "../../shop/application/shopSettingsService.js";
 
 const SERVICING = ["ACTIVE", "DUE_SOON", "DUE", "OVERDUE", "DEFAULTED"];
+
+/** Repayment methods a freeform loan slip may choose (§ loan slip). */
+const SLIP_REPAYMENT_METHODS = [
+  "BULLET",
+  "PRINCIPAL_AND_INTEREST",
+  "EQUAL_INSTALLMENT",
+  "INTEREST_ONLY",
+] as const;
+type SlipRepaymentMethod = (typeof SLIP_REPAYMENT_METHODS)[number];
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function daysBetweenDates(a: Date, b: Date): number {
+  return Math.round((b.getTime() - a.getTime()) / MS_PER_DAY);
+}
+
+/** Whole calendar months between two dates, the same convention used to lay out monthly installments. */
+function monthsBetweenDates(a: Date, b: Date): number {
+  let months = (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+  if (b.getDate() < a.getDate()) months -= 1;
+  return months;
+}
+
+export interface IssueLoanSlipInput {
+  customerId: string;
+  /** Prefill only — never a requirement. Null/omitted means no product at all. */
+  templateProductId?: string | null;
+  principal: string | number;
+  /** Defaults to now. */
+  disbursedAt?: string;
+  rateUnit: "DAILY" | "MONTHLY";
+  ratePercent: number;
+  /** 逾期利率 — recorded for reference; not automatically applied to the balance. */
+  overdueRatePercent?: number | null;
+  repaymentMethod: SlipRepaymentMethod;
+  /** POST_PAID is the only implemented value; PRE_PAID is refused explicitly. */
+  interestTiming: "PRE_PAID" | "POST_PAID";
+  /** Either termCount or maturityDate is required; termCount wins if both are given. */
+  termCount?: number;
+  maturityDate?: string;
+  idempotencyKey: string;
+}
+
+function resolveSlipTermCount(input: IssueLoanSlipInput, termUnit: TermUnit, disbursedAt: Date): number {
+  if (input.termCount !== undefined && input.termCount !== null) {
+    if (!Number.isInteger(input.termCount) || input.termCount <= 0) {
+      throw new ValidationError("termCount must be a positive integer");
+    }
+    return input.termCount;
+  }
+  if (input.maturityDate) {
+    const maturity = new Date(input.maturityDate);
+    if (Number.isNaN(maturity.getTime())) {
+      throw new ValidationError("maturityDate is invalid", { maturityDate: input.maturityDate });
+    }
+    const count =
+      termUnit === "DAY" ? daysBetweenDates(disbursedAt, maturity) : monthsBetweenDates(disbursedAt, maturity);
+    if (count <= 0) {
+      throw new ValidationError("到期日必須晚於放款日", {
+        disbursedAt: disbursedAt.toISOString(),
+        maturityDate: input.maturityDate,
+      });
+    }
+    return count;
+  }
+  throw new ValidationError("請提供到期日或天數（termCount 或 maturityDate 擇一必填）");
+}
 
 export class LoanService {
   constructor(
     private readonly db: PrismaClient,
     private readonly audit: AuditService,
     private readonly clock: Clock,
-    private readonly disbursementProvider: DisbursementProvider
+    private readonly disbursementProvider: DisbursementProvider,
+    private readonly shopSettings: ShopSettingsService
   ) {}
 
   /**
@@ -57,6 +128,16 @@ export class LoanService {
         loanId: application.loan.id,
       });
     }
+
+    // This path always comes from a priced offer, and LendingApplicationService
+    // .create requires a product to be priced against — a freeform loan slip
+    // is created directly by issueLoanSlip and never reaches here.
+    if (!application.requestedProduct) {
+      throw new ValidationError("Application has no requested product", { applicationId });
+    }
+    // Captured into a local so the narrowing above survives into the
+    // transaction closure below, which TypeScript cannot see through.
+    const requestedProduct = application.requestedProduct;
 
     const approval = application.approvals[0];
     const offer = application.loanOffers[0];
@@ -120,8 +201,8 @@ export class LoanService {
           // cannot change what settling this loan early costs.
           settlementPolicy: offer.settlementPolicy,
           productId: application.requestedProductId,
-          productVersion: application.requestedProduct.version,
-          feeRules: application.requestedProduct.feeRules,
+          productVersion: requestedProduct.version,
+          feeRules: requestedProduct.feeRules,
           pricingVersion: offer.pricingVersion,
           riskAssessmentVersion: assessment?.modelVersion ?? "none",
           approvalVersion: approval.id,
@@ -171,6 +252,213 @@ export class LoanService {
     });
 
     return this.getById(loan.id);
+  }
+
+  /**
+   * 一筆借據一張單 — a freeform loan slip. Every term is filled in by hand on
+   * the spot rather than looked up from a product: the product is at most a
+   * prefill template (templateProductId), never a requirement. This skips
+   * the risk/limit/pricing/approval pipeline entirely — there is no
+   * automated underwriting decision here, the person writing the slip IS the
+   * decision — but still writes a synthetic APPROVED LendingApplication so
+   * every existing invariant that hangs off Loan.applicationId keeps
+   * holding, and still runs the same RepaymentEngine every other loan does,
+   * so the schedule math is never duplicated.
+   *
+   * Loan + snapshot + schedule are written in one transaction, same as
+   * createFromApprovedApplication; disbursement is a separate, already
+   * idempotent step (LoanService.disburse) the caller triggers next.
+   */
+  async issueLoanSlip(input: IssueLoanSlipInput, context: AuditContext) {
+    if (!input.idempotencyKey) {
+      throw new ValidationError("Idempotency-Key is required to issue a loan slip");
+    }
+
+    const existingApplication = await this.db.lendingApplication.findUnique({
+      where: { slipIdempotencyKey: input.idempotencyKey },
+    });
+    if (existingApplication) {
+      const existingLoan = await this.db.loan.findUnique({
+        where: { applicationId: existingApplication.id },
+      });
+      if (existingLoan) return { loan: await this.getById(existingLoan.id), replayed: true };
+    }
+
+    const customer = await this.db.customer.findUnique({ where: { id: input.customerId } });
+    if (!customer) throw new CustomerNotFoundError(input.customerId);
+
+    const principal = Money.fromMajorUnits(input.principal);
+    if (!principal.isPositive()) throw new ValidationError("principal must be positive");
+
+    if (!SLIP_REPAYMENT_METHODS.includes(input.repaymentMethod)) {
+      throw new ValidationError("Unsupported repayment method for a loan slip", {
+        repaymentMethod: input.repaymentMethod,
+        allowed: SLIP_REPAYMENT_METHODS,
+      });
+    }
+    if (input.rateUnit !== "DAILY" && input.rateUnit !== "MONTHLY") {
+      throw new ValidationError("rateUnit must be DAILY or MONTHLY for a loan slip", {
+        rateUnit: input.rateUnit,
+      });
+    }
+    if (typeof input.ratePercent !== "number" || !Number.isFinite(input.ratePercent) || input.ratePercent < 0) {
+      throw new ValidationError("ratePercent must be zero or positive");
+    }
+    if (input.overdueRatePercent != null && input.overdueRatePercent < 0) {
+      throw new ValidationError("overdueRatePercent must be zero or positive");
+    }
+    // 先收息 (interest deducted from the disbursed amount up front) has no
+    // support anywhere in the disbursement or schedule engines — disburse()
+    // always pays out the full principal, and the schedule always bills
+    // interest through the installments. Refusing here is the honest
+    // answer; silently treating it as 後收息 would not be.
+    if (input.interestTiming === "PRE_PAID") {
+      throw new ValidationError(
+        "先收息（撥款時從本金先扣除利息）目前系統尚未實作，請選擇後收息",
+        { interestTiming: "PRE_PAID" }
+      );
+    }
+    if (input.interestTiming !== "POST_PAID") {
+      throw new ValidationError("interestTiming must be PRE_PAID or POST_PAID", {
+        interestTiming: input.interestTiming,
+      });
+    }
+
+    // Shop-wide rate ceiling (店規) applies here exactly as it does to a
+    // priced product or a manager's approval override — a freeform slip is
+    // not a way around it.
+    await this.shopSettings.assertWithinCap(input.ratePercent, input.rateUnit as RateUnit);
+
+    const termUnit: TermUnit = input.rateUnit === "DAILY" ? "DAY" : "MONTH";
+    const disbursedAt = input.disbursedAt ? new Date(input.disbursedAt) : this.clock.now();
+    if (Number.isNaN(disbursedAt.getTime())) {
+      throw new ValidationError("disbursedAt is invalid", { disbursedAt: input.disbursedAt });
+    }
+    const termCount = resolveSlipTermCount(input, termUnit, disbursedAt);
+
+    let template: { id: string; version: number } | null = null;
+    if (input.templateProductId) {
+      const product = await this.db.loanProduct.findUnique({ where: { id: input.templateProductId } });
+      if (!product) throw new ProductNotFoundError(input.templateProductId);
+      template = product;
+    }
+
+    const schedule = RepaymentEngine.generateSchedule({
+      principal,
+      ratePercent: input.ratePercent,
+      termCount,
+      startDate: disbursedAt,
+      repaymentMethod: input.repaymentMethod,
+      termUnit,
+      rateUnit: input.rateUnit,
+    });
+
+    const maturityDate = schedule.installments[schedule.installments.length - 1]!.dueDate;
+    const applicationSequence = (await this.db.lendingApplication.count()) + 1;
+    const loanSequence = (await this.db.loan.count()) + 1;
+
+    const created = await this.db.$transaction(async (tx) => {
+      const application = await tx.lendingApplication.create({
+        data: {
+          applicationNumber: formatSequenceNumber("APP", applicationSequence),
+          customerId: customer.id,
+          requestedProductId: template?.id ?? null,
+          requestedAmountCents: principal.toMinorUnits(),
+          requestedTermCount: termCount,
+          purpose: "放款單（一筆借據一張單）",
+          status: "APPROVED",
+          slipIdempotencyKey: input.idempotencyKey,
+        },
+      });
+
+      const loan = await tx.loan.create({
+        data: {
+          loanNumber: formatSequenceNumber("LN", loanSequence),
+          customerId: customer.id,
+          applicationId: application.id,
+          productId: template?.id ?? null,
+          principalCents: principal.toMinorUnits(),
+          // Nothing is owed until the money actually goes out the door.
+          outstandingPrincipalCents: 0,
+          outstandingInterestCents: 0,
+          outstandingFeeCents: 0,
+          status: "CREATED",
+          startDate: disbursedAt,
+          maturityDate,
+        },
+      });
+
+      await tx.loanSnapshot.create({
+        data: {
+          loanId: loan.id,
+          principalCents: principal.toMinorUnits(),
+          ratePercent: input.ratePercent,
+          rateUnit: input.rateUnit,
+          calculationMethod: "SIMPLE_INTEREST",
+          termCount,
+          termUnit,
+          repaymentMethod: input.repaymentMethod,
+          settlementPolicy: "FULL_CONTRACT_INTEREST",
+          productId: template?.id ?? null,
+          productVersion: template?.version ?? null,
+          feeRules: "[]",
+          pricingVersion: "manual",
+          riskAssessmentVersion: "none",
+          approvalVersion: "manual-slip",
+          overdueRatePercent: input.overdueRatePercent ?? null,
+          interestTiming: "POST_PAID",
+        },
+      });
+
+      await tx.scheduleLine.createMany({
+        data: schedule.installments.map((installment) => ({
+          loanId: loan.id,
+          installmentNumber: installment.installmentNumber,
+          dueDate: installment.dueDate,
+          principalDueCents: installment.principalDue.toMinorUnits(),
+          interestDueCents: installment.interestDue.toMinorUnits(),
+          feeDueCents: installment.feeDue.toMinorUnits(),
+          totalDueCents: installment.principalDue
+            .add(installment.interestDue)
+            .add(installment.feeDue)
+            .toMinorUnits(),
+        })),
+      });
+
+      const ready = await tx.loan.update({
+        where: { id: loan.id },
+        data: { status: "READY_FOR_DISBURSEMENT" },
+      });
+
+      await this.audit.record(
+        context,
+        {
+          action: "LOAN_CREATED",
+          resource: "Loan",
+          resourceId: loan.id,
+          after: {
+            loanNumber: loan.loanNumber,
+            principal: principal.toMajorUnitsString(),
+            ratePercent: input.ratePercent,
+            rateUnit: input.rateUnit,
+            termCount,
+            termUnit,
+            repaymentMethod: input.repaymentMethod,
+            maturityDate,
+          },
+          metadata: {
+            applicationId: application.id,
+            source: "loan_slip",
+            templateProductId: template?.id ?? null,
+          },
+        },
+        tx
+      );
+
+      return ready;
+    });
+
+    return { loan: await this.getById(created.id), replayed: false };
   }
 
   /**

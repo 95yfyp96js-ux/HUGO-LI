@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { Money } from "../../../shared/money.js";
-import { ApplicationNotFoundError } from "../../../shared/errors.js";
+import { ApplicationNotFoundError, ValidationError } from "../../../shared/errors.js";
 import type { AuditContext, AuditService } from "../../audit/application/auditService.js";
 import { RiskEngine, type RiskGrade } from "../domain/riskEngine.js";
 import { LendingLimitEngine } from "../domain/lendingLimitEngine.js";
@@ -74,6 +74,14 @@ export class RiskService {
       include: { customer: true, requestedProduct: true },
     });
     if (!application) throw new ApplicationNotFoundError(applicationId);
+    // Only the underwriting pipeline reaches calculateLimit, and
+    // LendingApplicationService.create requires a product for that path — a
+    // freeform loan slip never submits through here.
+    if (!application.requestedProduct) {
+      throw new ValidationError("Application has no requested product to size a limit against", {
+        applicationId,
+      });
+    }
 
     const assessment = await this.db.riskAssessment.findUniqueOrThrow({
       where: { id: riskAssessmentId },

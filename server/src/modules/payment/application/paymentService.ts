@@ -24,6 +24,25 @@ import { SettlementPolicyNotImplementedError } from "../../../shared/errors.js";
 
 const SERVICING = ["ACTIVE", "DUE_SOON", "DUE", "OVERDUE", "DEFAULTED"];
 
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** "YYYY-MM" read as a Taipei calendar month; omitted means the current one. */
+function parseTaipeiMonth(monthInput: string | undefined, now: Date): { year: number; monthIndex: number } {
+  if (monthInput) {
+    const match = /^(\d{4})-(\d{2})$/.exec(monthInput);
+    if (!match) throw new ValidationError("month must be YYYY-MM", { month: monthInput });
+    const monthIndex = Number(match[2]) - 1;
+    if (monthIndex < 0 || monthIndex > 11) {
+      throw new ValidationError("month must be YYYY-MM", { month: monthInput });
+    }
+    return { year: Number(match[1]), monthIndex };
+  }
+  const [year, month] = resolveTaipeiDay(undefined, now).label.split("-");
+  return { year: Number(year), monthIndex: Number(month) - 1 };
+}
+
 export interface CreatePaymentInput {
   loanId: string;
   amount: string | number;
@@ -441,6 +460,235 @@ export class PaymentService {
   }
 
   /**
+   * 回款確認 — confirms payment for exactly ONE installment, never the
+   * oldest-open-balance cascade `create()` uses. A collector picking
+   * installment #3 out of order (an earlier one is still unpaid) must only
+   * clear #3; nothing here ever touches another ScheduleLine.
+   *
+   * Idempotency-Key protects a retried request the normal way (Payment.
+   * idempotencyKey is unique). A SECOND, differently-keyed confirm of an
+   * already-paid installment is a distinct risk this method also has to
+   * refuse — that is a genuine double-record, not a retry — so the
+   * ScheduleLine's own status is re-read and compare-and-set INSIDE the
+   * transaction: whichever request's write lands first flips PENDING/
+   * PARTIALLY_PAID -> PAID, and every other one sees a status that no longer
+   * matches and stops.
+   */
+  async confirmInstallment(
+    loanId: string,
+    installmentNumber: number,
+    input: { idempotencyKey: string },
+    context: AuditContext
+  ) {
+    if (!input.idempotencyKey) {
+      throw new ValidationError("Idempotency-Key is required to confirm an installment");
+    }
+
+    const existing = await this.db.payment.findUnique({
+      where: { idempotencyKey: input.idempotencyKey },
+      include: { allocations: true },
+    });
+    if (existing) return { payment: existing, replayed: true };
+
+    const loan = await this.loadLoanForPayment(loanId);
+    if (!SERVICING.includes(loan.status)) {
+      throw new InvalidLoanStateError(loan.id, loan.status, "PAYMENT");
+    }
+
+    const line = loan.scheduleLines.find((l) => l.installmentNumber === installmentNumber);
+    if (!line) {
+      throw new ValidationError("No such installment on this loan", { loanId, installmentNumber });
+    }
+
+    const sequence = (await this.db.payment.count()) + 1;
+    const paidAt = this.clock.now();
+
+    const payment = await this.runConfirmInstallmentTransaction({
+      loan,
+      lineId: line.id,
+      installmentNumber,
+      paidAt,
+      sequence,
+      input,
+      context,
+    });
+
+    return { payment, replayed: false };
+  }
+
+  private async runConfirmInstallmentTransaction(args: {
+    loan: Awaited<ReturnType<PaymentService["loadLoanForPayment"]>>;
+    lineId: string;
+    installmentNumber: number;
+    paidAt: Date;
+    sequence: number;
+    input: { idempotencyKey: string };
+    context: AuditContext;
+  }) {
+    const { input } = args;
+    try {
+      return await this.writeInstallmentConfirmation(args);
+    } catch (error) {
+      if (isUniqueConstraintViolation(error, "idempotencyKey")) {
+        const winner = await this.db.payment.findUnique({
+          where: { idempotencyKey: input.idempotencyKey },
+          include: { allocations: true },
+        });
+        if (winner) return winner;
+      }
+      throw error;
+    }
+  }
+
+  private async writeInstallmentConfirmation(args: {
+    loan: Awaited<ReturnType<PaymentService["loadLoanForPayment"]>>;
+    lineId: string;
+    installmentNumber: number;
+    paidAt: Date;
+    sequence: number;
+    input: { idempotencyKey: string };
+    context: AuditContext;
+  }) {
+    const { loan, lineId, installmentNumber, paidAt, sequence, input, context } = args;
+
+    return await this.db.$transaction(async (tx) => {
+      await assertDayOpen(tx, paidAt);
+
+      // Re-read fresh, inside the transaction: the outer read that found
+      // this installment may already be stale by the time this runs, and
+      // the amount owed has to come from what is actually still due right
+      // now, not from a snapshot taken before this transaction started.
+      const freshLine = await tx.scheduleLine.findUniqueOrThrow({ where: { id: lineId } });
+
+      const principalOwed = Money.fromMinorUnits(freshLine.principalDueCents - freshLine.principalPaidCents);
+      const interestOwed = Money.fromMinorUnits(freshLine.interestDueCents - freshLine.interestPaidCents);
+      const feeOwed = Money.fromMinorUnits(freshLine.feeDueCents - freshLine.feePaidCents);
+      const amount = principalOwed.add(interestOwed).add(feeOwed);
+
+      if (!amount.isPositive()) {
+        throw new InvalidPaymentError("This installment has already been confirmed", {
+          loanId: loan.id,
+          installmentNumber,
+        });
+      }
+
+      // Compare-and-set against "not already PAID" — not against the exact
+      // status just read, which would trivially match its own already-PAID
+      // value and let a second confirmation through. This is the one true
+      // guard against two confirmations recording the same installment
+      // twice.
+      const claimed = await tx.scheduleLine.updateMany({
+        where: { id: lineId, status: { in: ["PENDING", "PARTIALLY_PAID"] } },
+        data: {
+          principalPaidCents: freshLine.principalPaidCents + principalOwed.toMinorUnits(),
+          interestPaidCents: freshLine.interestPaidCents + interestOwed.toMinorUnits(),
+          feePaidCents: freshLine.feePaidCents + feeOwed.toMinorUnits(),
+          status: "PAID",
+        },
+      });
+      if (claimed.count !== 1) {
+        throw new InvalidPaymentError("This installment is no longer payable", {
+          loanId: loan.id,
+          installmentNumber,
+        });
+      }
+
+      const created = await tx.payment.create({
+        data: {
+          paymentNumber: formatSequenceNumber("PMT", sequence),
+          loanId: loan.id,
+          customerId: loan.customerId,
+          amountCents: amount.toMinorUnits(),
+          method: "CASH",
+          status: "CONFIRMED",
+          idempotencyKey: input.idempotencyKey,
+          paidAt,
+          createdBy: context.userId ?? "system",
+          allocations: {
+            create: {
+              principalAmountCents: principalOwed.toMinorUnits(),
+              interestAmountCents: interestOwed.toMinorUnits(),
+              feeAmountCents: feeOwed.toMinorUnits(),
+            },
+          },
+        },
+        include: { allocations: true },
+      });
+
+      await tx.moneyEvent.create({
+        data: {
+          loanId: loan.id,
+          customerId: loan.customerId,
+          type: "PAYMENT",
+          amountCents: amount.toMinorUnits(),
+          referenceId: created.id,
+          occurredAt: paidAt,
+          createdBy: context.userId ?? "system",
+          metadata: JSON.stringify({ method: created.method, mode: "installment_confirm", installmentNumber }),
+        },
+      });
+
+      await tx.scheduleLineAllocation.create({
+        data: {
+          paymentId: created.id,
+          scheduleLineId: lineId,
+          principalAmountCents: principalOwed.toMinorUnits(),
+          interestAmountCents: interestOwed.toMinorUnits(),
+          feeAmountCents: feeOwed.toMinorUnits(),
+        },
+      });
+
+      const outstanding = {
+        principal: Money.fromMinorUnits(loan.outstandingPrincipalCents),
+        interest: Money.fromMinorUnits(loan.outstandingInterestCents),
+        fees: Money.fromMinorUnits(loan.outstandingFeeCents),
+      };
+      const newBalance = {
+        principal: outstanding.principal.subtract(principalOwed),
+        interest: outstanding.interest.subtract(interestOwed),
+        fees: outstanding.fees.subtract(feeOwed),
+      };
+      const remaining = newBalance.principal.add(newBalance.interest).add(newBalance.fees);
+
+      await tx.loan.update({
+        where: { id: loan.id },
+        data: {
+          outstandingPrincipalCents: newBalance.principal.toMinorUnits(),
+          outstandingInterestCents: newBalance.interest.toMinorUnits(),
+          outstandingFeeCents: newBalance.fees.toMinorUnits(),
+        },
+      });
+
+      if (remaining.isZero()) {
+        await this.settleLoan(tx, loan.id, loan.customerId, paidAt, context);
+      } else {
+        await this.refreshStatus(tx, loan.id, loan.status as LoanStatus);
+      }
+
+      await this.syncCollectionCases(tx, loan.id, remaining);
+
+      await this.audit.record(
+        context,
+        {
+          action: "PAYMENT_CREATED",
+          resource: "Payment",
+          resourceId: created.id,
+          after: {
+            paymentNumber: created.paymentNumber,
+            amount: amount.toMajorUnitsString(),
+            installmentNumber,
+            remainingOutstanding: remaining.toMajorUnitsString(),
+          },
+          metadata: { loanId: loan.id, mode: "installment_confirm" },
+        },
+        tx
+      );
+
+      return created;
+    });
+  }
+
+  /**
    * Installments due on a given calendar day that are not yet fully
    * collected — the receivables list a collector or officer works from.
    *
@@ -566,6 +814,109 @@ export class PaymentService {
         uncollectedAmount: uncollectedAmount.toMajorUnitsString(),
       },
     };
+  }
+
+  /**
+   * 催款日程表 — every ScheduleLine still open (PENDING or PARTIALLY_PAID)
+   * whose due date falls in [from, to], both inclusive Taipei calendar days.
+   * Unlike dueOn's 應收 (which is about one day's money flow and excludes a
+   * line already resolved before that day), this is a simple, standing
+   * "what is still unpaid and when was it due" collections-desk view — the
+   * definition CalendarSummary below also uses, so the two are always
+   * exactly consistent with each other by construction.
+   */
+  async unpaidInstallments(params: { from?: string; to?: string }) {
+    const now = this.clock.now();
+    let fromRange, toRange;
+    try {
+      fromRange = resolveTaipeiDay(params.from, now);
+      toRange = resolveTaipeiDay(params.to ?? params.from, now);
+    } catch (error) {
+      throw new ValidationError("from/to must be valid calendar dates (YYYY-MM-DD)", {
+        from: params.from,
+        to: params.to,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (toRange.start.getTime() < fromRange.start.getTime()) {
+      throw new ValidationError("`to` must not be earlier than `from`", { from: params.from, to: params.to });
+    }
+
+    const lines = await this.db.scheduleLine.findMany({
+      where: {
+        dueDate: { gte: fromRange.start, lt: toRange.end },
+        status: { in: ["PENDING", "PARTIALLY_PAID"] },
+      },
+      orderBy: [{ dueDate: "asc" }, { installmentNumber: "asc" }],
+      include: {
+        loan: {
+          select: {
+            id: true,
+            loanNumber: true,
+            customer: { select: { id: true, name: true, customerNumber: true } },
+          },
+        },
+      },
+    });
+
+    const items = lines.map((line) => {
+      const totalDue = Money.fromMinorUnits(line.totalDueCents);
+      const paidSoFar = Money.fromMinorUnits(
+        line.principalPaidCents + line.interestPaidCents + line.feePaidCents
+      );
+      const remaining = totalDue.subtract(paidSoFar);
+      const status: "OVERDUE" | "DUE_TODAY" | "UPCOMING" = isBeforeTaipeiDay(line.dueDate, now)
+        ? "OVERDUE"
+        : isBeforeTaipeiDay(now, line.dueDate)
+          ? "UPCOMING"
+          : "DUE_TODAY";
+
+      return {
+        loanId: line.loan.id,
+        loanNumber: line.loan.loanNumber,
+        customerId: line.loan.customer.id,
+        customerName: line.loan.customer.name,
+        customerNumber: line.loan.customer.customerNumber,
+        installmentNumber: line.installmentNumber,
+        dueDate: line.dueDate,
+        principalDue: Money.fromMinorUnits(line.principalDueCents).toMajorUnitsString(),
+        interestDue: Money.fromMinorUnits(line.interestDueCents).toMajorUnitsString(),
+        totalDue: totalDue.toMajorUnitsString(),
+        remaining: remaining.toMajorUnitsString(),
+        status,
+      };
+    });
+
+    return { from: fromRange.label, to: toRange.label, items };
+  }
+
+  /**
+   * 月曆 — per-day counts and amounts for a Taipei calendar month, built by
+   * calling unpaidInstallments for each day in the month. Reusing that
+   * function (rather than a separate grouped query) is what guarantees a
+   * calendar day's count and its drill-down list can never disagree.
+   */
+  async calendarSummary(monthInput?: string) {
+    const now = this.clock.now();
+    const { year, monthIndex } = parseTaipeiMonth(monthInput, now);
+    const daysInMonth = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+
+    const labels = Array.from(
+      { length: daysInMonth },
+      (_, i) => `${year}-${pad2(monthIndex + 1)}-${pad2(i + 1)}`
+    );
+    const perDay = await Promise.all(labels.map((label) => this.unpaidInstallments({ from: label, to: label })));
+
+    const days = perDay
+      .map((day, index) => ({ label: labels[index]!, items: day.items }))
+      .filter((day) => day.items.length > 0)
+      .map((day) => ({
+        date: day.label,
+        count: day.items.length,
+        amount: Money.sum(day.items.map((i) => Money.fromMajorUnits(i.remaining))).toMajorUnitsString(),
+      }));
+
+    return { month: `${year}-${pad2(monthIndex + 1)}`, days };
   }
 
   async list(params: { loanId?: string; customerId?: string; take?: number; skip?: number }) {

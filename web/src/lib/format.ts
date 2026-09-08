@@ -92,10 +92,11 @@ export const PRIORITY_LABELS: Record<string, string> = {
 };
 
 export const REPAYMENT_METHOD_LABELS: Record<string, string> = {
-  INTEREST_ONLY: "按月付息、到期還本",
-  PRINCIPAL_AND_INTEREST: "本息分期攤還",
+  INTEREST_ONLY: "只還息、到期還本",
+  PRINCIPAL_AND_INTEREST: "等額本金（本金平均攤還）",
+  EQUAL_INSTALLMENT: "等額本息（本利合計平均攤還）",
   PRINCIPAL_ONLY: "僅還本金",
-  BULLET: "到期一次清償",
+  BULLET: "一次還本息",
   CUSTOM: "自訂",
 };
 

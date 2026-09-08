@@ -83,7 +83,7 @@ export function createContainer(options: ContainerOptions = {}): Container {
     approvals: new ApprovalService(db, audit, shopSettings),
     risk,
     pricing,
-    loans: new LoanService(db, audit, clock, disbursementProvider),
+    loans: new LoanService(db, audit, clock, disbursementProvider, shopSettings),
     payments: new PaymentService(db, audit, clock),
     collections: new CollectionService(db, audit, clock),
     renewals: new RenewalService(db, audit, clock, risk, pricing),

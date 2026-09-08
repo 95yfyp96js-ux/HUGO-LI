@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { Money } from "../../../shared/money.js";
-import { ApplicationNotFoundError } from "../../../shared/errors.js";
+import { ApplicationNotFoundError, ValidationError } from "../../../shared/errors.js";
 import type { AuditContext, AuditService } from "../../audit/application/auditService.js";
 import { PricingEngine, type FeeRule } from "../domain/pricingEngine.js";
 import type { RiskGrade } from "../../risk/domain/riskEngine.js";
@@ -31,7 +31,17 @@ export class PricingService {
     });
     if (!application) throw new ApplicationNotFoundError(input.applicationId);
 
+    // Pricing only ever runs on the underwriting pipeline (submit ->
+    // risk -> pricing), and LendingApplicationService.create requires a
+    // product for that path — a freeform loan slip never reaches here. This
+    // guard exists because the FK is nullable now (for the slip), not
+    // because a product-driven application can actually lack one.
     const product = application.requestedProduct;
+    if (!product) {
+      throw new ValidationError("Application has no requested product to price against", {
+        applicationId: application.id,
+      });
+    }
 
     const priced = PricingEngine.priceOffer({
       approvedAmount: input.approvedAmount,

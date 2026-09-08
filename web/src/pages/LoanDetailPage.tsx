@@ -142,10 +142,26 @@ export function LoanDetailPage() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState("overview");
   const [action, setAction] = useState<"renew" | "extend" | null>(null);
+  const [confirmingInstallment, setConfirmingInstallment] = useState<number | null>(null);
 
   const { data: loan, isLoading, error } = useQuery({
     queryKey: ["loan", id],
     queryFn: () => api<LoanDetail>(`/api/loans/${id}`),
+  });
+
+  const confirmInstallment = useMutation({
+    mutationFn: (installmentNumber: number) => {
+      setConfirmingInstallment(installmentNumber);
+      return api(`/api/loans/${id}/installments/${installmentNumber}/confirm`, {
+        method: "POST",
+        idempotencyKey: newIdempotencyKey(),
+      });
+    },
+    onSettled: () => setConfirmingInstallment(null),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["loan", id] });
+      queryClient.invalidateQueries({ queryKey: ["loan-balance", id] });
+    },
   });
 
   const { data: balance } = useQuery({
@@ -296,7 +312,9 @@ export function LoanDetailPage() {
       )}
 
       {tab === "schedule" && (
-        <DataTable
+        <>
+          <ErrorBanner error={confirmInstallment.error} />
+          <DataTable
           rows={loan.scheduleLines}
           rowKey={(row) => row.id}
           empty="尚無還款期程"
@@ -342,8 +360,22 @@ export function LoanDetailPage() {
                 </span>
               ),
             },
+            {
+              header: "",
+              cell: (row) =>
+                isServicing && can("PAYMENT_CREATE") && row.status !== "PAID" ? (
+                  <button
+                    className="btn-secondary text-xs"
+                    disabled={confirmInstallment.isPending}
+                    onClick={() => confirmInstallment.mutate(row.installmentNumber)}
+                  >
+                    {confirmingInstallment === row.installmentNumber ? "確認中…" : "回款確認"}
+                  </button>
+                ) : null,
+            },
           ]}
-        />
+          />
+        </>
       )}
 
       {tab === "payments" && (
