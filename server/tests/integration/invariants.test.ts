@@ -228,6 +228,188 @@ describe("Domain invariants", () => {
   });
 });
 
+// V1.1 §6: the three financial invariants a single-till reconciliation
+// depends on daily — checked here against the real services and a real
+// (temp-file) SQLite database, not re-derived in the test.
+describe("Financial invariants (V1.1)", () => {
+  let env: Awaited<ReturnType<typeof createTestEnv>>;
+
+  beforeEach(async () => {
+    env = await createTestEnv(new Date("2026-01-01T09:00:00Z"));
+  });
+
+  afterEach(async () => {
+    await env.cleanup();
+  });
+
+  // A payment's allocation must account for every cent collected — nothing
+  // vanishes and nothing is invented on the way from "amount paid" to
+  // "principal/interest/fee split".
+  it("splits every payment so principal + interest + fee equals the amount paid", async () => {
+    const { loanId } = await originateLoan(env);
+
+    const { payment } = await env.container.payments.create(
+      { loanId, amount: 10000, idempotencyKey: "alloc-sum-1" },
+      ctx(env.users.userIds.MANAGER!)
+    );
+
+    const stored = await env.db.payment.findUniqueOrThrow({
+      where: { id: payment.id },
+      include: { allocations: true },
+    });
+    const allocation = stored.allocations[0]!;
+    const allocationSum =
+      allocation.principalAmountCents + allocation.interestAmountCents + allocation.feeAmountCents;
+    expect(allocationSum).toBe(stored.amountCents);
+    expect(allocationSum).toBe(1000000); // 10000.00 in cents
+
+    // Same invariant one layer down: the per-installment breakdown the daily
+    // close relies on must also foot to the payment amount.
+    const lineAllocations = await env.db.scheduleLineAllocation.findMany({
+      where: { paymentId: payment.id },
+    });
+    const lineSum = lineAllocations.reduce(
+      (acc, a) => acc + a.principalAmountCents + a.interestAmountCents + a.feeAmountCents,
+      0
+    );
+    expect(lineSum).toBe(stored.amountCents);
+  });
+
+  // After money moves back out via a reversal, the stored balance must still
+  // agree with a from-scratch replay of the ledger — not just "look right".
+  it("keeps the stored balance equal to a ledger recompute after a reversal", async () => {
+    const { loanId } = await originateLoan(env);
+
+    // First payment: pure interest, mirrors the existing reversal test.
+    await env.container.payments.create(
+      { loanId, amount: 1250, idempotencyKey: "recompute-1" },
+      ctx(env.users.userIds.MANAGER!)
+    );
+    // Second payment: clears the remaining interest and spills into principal.
+    const { payment: second } = await env.container.payments.create(
+      { loanId, amount: 5000, idempotencyKey: "recompute-2" },
+      ctx(env.users.userIds.MANAGER!)
+    );
+
+    const afterBothPayments = await env.db.loan.findUniqueOrThrow({ where: { id: loanId } });
+    expect(afterBothPayments.outstandingInterestCents).toBe(0);
+    expect(afterBothPayments.outstandingPrincipalCents).toBe(4750000); // 50000 - 2500 = 47500.00
+
+    await env.container.payments.reverse(second.id, "多收，沖銷", ctx(env.users.userIds.MANAGER!));
+
+    const stored = await env.db.loan.findUniqueOrThrow({ where: { id: loanId } });
+    // Back to exactly where it was after only the first payment.
+    expect(stored.outstandingInterestCents).toBe(250000); // 2500.00
+    expect(stored.outstandingPrincipalCents).toBe(5000000); // 50000.00
+
+    const projected = await env.container.loans.recalculateLoanBalance(loanId);
+    expect(projected.outstandingInterest.toMinorUnits()).toBe(stored.outstandingInterestCents);
+    expect(projected.outstandingPrincipal.toMinorUnits()).toBe(stored.outstandingPrincipalCents);
+    expect(projected.outstandingFees.toMinorUnits()).toBe(stored.outstandingFeeCents);
+  });
+
+  // Once a Taipei day is closed, nothing dated into it may write — new
+  // payments, reversals of that day's payments, or disbursements — until a
+  // manager reopens it with a reason.
+  describe("a closed day refuses new financial writes dated into it", () => {
+    const closedDay = "2026-01-01"; // the Taipei calendar day the test clock sits in
+
+    it("refuses a new payment dated into the closed day", async () => {
+      const { loanId } = await originateLoan(env);
+      await env.container.dailyClose.close(closedDay, ctx(env.users.userIds.MANAGER!));
+
+      await expect(
+        env.container.payments.create(
+          { loanId, amount: 1000, idempotencyKey: "closed-day-payment" },
+          ctx(env.users.userIds.MANAGER!)
+        )
+      ).rejects.toMatchObject({ code: "DAILY_CLOSE_LOCKED" });
+
+      // Nothing was written — the day's own guard, not just a rejected request.
+      const count = await env.db.payment.count({ where: { loanId } });
+      expect(count).toBe(0);
+    });
+
+    it("refuses to reverse a payment whose own day is closed", async () => {
+      const { loanId } = await originateLoan(env);
+      const { payment } = await env.container.payments.create(
+        { loanId, amount: 1250, idempotencyKey: "closed-day-reversal" },
+        ctx(env.users.userIds.MANAGER!)
+      );
+
+      await env.container.dailyClose.close(closedDay, ctx(env.users.userIds.MANAGER!));
+
+      await expect(
+        env.container.payments.reverse(payment.id, "測試", ctx(env.users.userIds.MANAGER!))
+      ).rejects.toMatchObject({ code: "DAILY_CLOSE_LOCKED" });
+
+      const stored = await env.db.payment.findUniqueOrThrow({ where: { id: payment.id } });
+      expect(stored.status).toBe("CONFIRMED");
+    });
+
+    it("refuses a disbursement dated into the closed day", async () => {
+      const customer = await env.container.customers.create(
+        {
+          name: "待撥款客戶",
+          identityNumber: `C${Math.floor(100000000 + Math.random() * 899999999)}`,
+          dateOfBirth: "1990-01-01",
+          phone: "0911111111",
+          monthlyIncome: 80000,
+        },
+        ctx(env.users.userIds.LOAN_OFFICER!)
+      );
+      const application = await env.container.applications.create(
+        {
+          customerId: customer.id,
+          requestedProductId: env.users.productId,
+          requestedAmount: 30000,
+          requestedTermCount: 3,
+          income: 80000,
+          existingDebt: 0,
+        },
+        ctx(env.users.userIds.LOAN_OFFICER!)
+      );
+      await env.container.applications.submit(application.id, ctx(env.users.userIds.LOAN_OFFICER!));
+      await env.container.approvals.approve(
+        application.id,
+        { reason: "ok" },
+        ctx(env.users.userIds.MANAGER!)
+      );
+      const loan = await env.container.loans.createFromApprovedApplication(
+        application.id,
+        ctx(env.users.userIds.MANAGER!)
+      );
+
+      await env.container.dailyClose.close(closedDay, ctx(env.users.userIds.MANAGER!));
+
+      await expect(
+        env.container.loans.disburse(
+          loan.id,
+          { idempotencyKey: `closed-disburse-${loan.id}` },
+          ctx(env.users.userIds.MANAGER!)
+        )
+      ).rejects.toMatchObject({ code: "DAILY_CLOSE_LOCKED" });
+
+      // Refused before the atomic claim step even runs — still exactly where
+      // loan creation left it, not half-claimed.
+      const stored = await env.db.loan.findUniqueOrThrow({ where: { id: loan.id } });
+      expect(stored.status).toBe("READY_FOR_DISBURSEMENT");
+    });
+
+    it("accepts the same write again once the day is reopened", async () => {
+      const { loanId } = await originateLoan(env);
+      await env.container.dailyClose.close(closedDay, ctx(env.users.userIds.MANAGER!));
+      await env.container.dailyClose.reopen(closedDay, "重新盤點", ctx(env.users.userIds.MANAGER!));
+
+      const { payment } = await env.container.payments.create(
+        { loanId, amount: 1000, idempotencyKey: "reopened-day-payment" },
+        ctx(env.users.userIds.MANAGER!)
+      );
+      expect(payment.id).toBeDefined();
+    });
+  });
+});
+
 describe("API contract", () => {
   let env: Awaited<ReturnType<typeof createTestEnv>>;
 

@@ -25,6 +25,37 @@ const num = (value: unknown, fallback?: number): number | undefined => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+function csvCell(value: string | number): string {
+  const text = String(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+/** Renders the daily close (應收/實收/未收) as CSV, with a trailing totals row. */
+function dailyCloseToCsv(close: Awaited<ReturnType<Container["payments"]["dueOn"]>>): string {
+  const header = ["客戶", "客戶編號", "貸號", "到期日", "應收", "實收", "未收", "狀態"];
+  const rows = close.items.map((item) => [
+    item.customerName,
+    item.customerNumber,
+    item.loanNumber,
+    item.dueDate.toISOString().slice(0, 10),
+    item.dueAmount,
+    item.collectedToday,
+    item.uncollected,
+    item.status === "OVERDUE" ? "已逾期" : "今天到期",
+  ]);
+  const totals = [
+    "總計",
+    "",
+    "",
+    close.date,
+    close.summary.dueAmount,
+    close.summary.collectedAmount,
+    close.summary.uncollectedAmount,
+    `應收 ${close.summary.dueCount} 筆／實收 ${close.summary.collectedCount} 筆`,
+  ];
+  return [header, ...rows, totals].map((row) => row.map(csvCell).join(",")).join("\n");
+}
+
 export function createRoutes(
   container: Container,
   rateLimits: RateLimitSettings = DEFAULT_RATE_LIMITS
@@ -76,6 +107,23 @@ export function createRoutes(
     "/auth/me",
     asyncHandler(async (req, res) => {
       res.json(req.user);
+    })
+  );
+
+  // Anyone changes their own password, and only their own — no permission
+  // check beyond being signed in.
+  router.post(
+    "/auth/change-password",
+    asyncHandler(async (req, res) => {
+      await container.auth.changeOwnPassword(
+        req.user!.id,
+        {
+          currentPassword: req.body?.currentPassword,
+          newPassword: req.body?.newPassword,
+        },
+        auditContext(req)
+      );
+      res.status(204).end();
     })
   );
 
@@ -453,6 +501,24 @@ export function createRoutes(
     })
   );
 
+  // Same figures as above, as a CSV download for the日結 record.
+  router.get(
+    "/payments/due-today/export",
+    requirePermission("PAYMENT_READ"),
+    asyncHandler(async (req, res) => {
+      const close = await container.payments.dueOn(req.query.date as string | undefined);
+      const csv = dailyCloseToCsv(close);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="daily-close-${close.date}.csv"`
+      );
+      // A BOM so Excel on Windows opens the UTF-8 Chinese headers correctly
+      // instead of guessing a legacy encoding.
+      res.send("﻿" + csv);
+    })
+  );
+
   router.post(
     "/payments/preview",
     requirePermission("PAYMENT_READ"),
@@ -631,6 +697,61 @@ export function createRoutes(
     })
   );
 
+  // --------------------------------------------------------- shop settings
+  // 店規：利率上限. Same permission as product design — a shop-wide policy
+  // is a product decision, not a system-administration one.
+  router.get(
+    "/settings/rate-cap",
+    requirePermission("PRODUCT_READ"),
+    asyncHandler(async (_req, res) => {
+      res.json({ maxMonthlyRatePercent: await container.shopSettings.getRateCap() });
+    })
+  );
+
+  router.put(
+    "/settings/rate-cap",
+    adminLimit.middleware,
+    requirePermission("PRODUCT_UPDATE"),
+    asyncHandler(async (req, res) => {
+      const value = req.body?.maxMonthlyRatePercent;
+      res.json(
+        await container.shopSettings.setRateCap(
+          value === null || value === undefined ? null : Number(value),
+          auditContext(req)
+        )
+      );
+    })
+  );
+
+  // ----------------------------------------------------------- daily close
+  router.get(
+    "/daily-close/:date",
+    requirePermission("PAYMENT_READ"),
+    asyncHandler(async (req, res) => {
+      res.json(await container.dailyClose.getStatus(req.params.date!));
+    })
+  );
+
+  router.post(
+    "/daily-close/:date/close",
+    adminLimit.middleware,
+    requirePermission("DAILY_CLOSE_MANAGE"),
+    asyncHandler(async (req, res) => {
+      res.json(await container.dailyClose.close(req.params.date!, auditContext(req)));
+    })
+  );
+
+  router.post(
+    "/daily-close/:date/reopen",
+    adminLimit.middleware,
+    requirePermission("DAILY_CLOSE_MANAGE"),
+    asyncHandler(async (req, res) => {
+      const reason = req.body?.reason as string | undefined;
+      if (!reason?.trim()) throw new ValidationError("A reason is required to reopen a closed day");
+      res.json(await container.dailyClose.reopen(req.params.date!, reason, auditContext(req)));
+    })
+  );
+
   // ------------------------------------------------------------- portfolio
   router.get(
     "/portfolio/summary",
@@ -683,6 +804,28 @@ export function createRoutes(
     requirePermission("USER_MANAGE"),
     asyncHandler(async (_req, res) => {
       res.json({ items: await container.auth.listUsers() });
+    })
+  );
+
+  router.post(
+    "/settings/users",
+    adminLimit.middleware,
+    requirePermission("USER_MANAGE"),
+    asyncHandler(async (req, res) => {
+      res.status(201).json(await container.auth.createUser(req.body, auditContext(req)));
+    })
+  );
+
+  router.patch(
+    "/settings/users/:id/status",
+    adminLimit.middleware,
+    requirePermission("USER_MANAGE"),
+    asyncHandler(async (req, res) => {
+      const status = req.body?.status;
+      if (status !== "ACTIVE" && status !== "DISABLED") {
+        throw new ValidationError("status must be ACTIVE or DISABLED");
+      }
+      res.json(await container.auth.setUserStatus(req.params.id!, status, auditContext(req)));
     })
   );
 

@@ -50,10 +50,12 @@ describe("schema portability", () => {
 
   it("never stores money in a floating point column", () => {
     const floats = fieldLines.filter(({ line }) => /^\w+\s+Float\b/.test(line));
-    // ratePercent is a rate, not an amount, and is never used as a stored
+    // These are all rates, not amounts, and are never used as a stored
     // balance — every amount goes through Money.
     for (const { model, line } of floats) {
-      expect(line, `${model}: ${line}`).toMatch(/^(ratePercent|approvedRatePercent)\s/);
+      expect(line, `${model}: ${line}`).toMatch(
+        /^(ratePercent|approvedRatePercent|maxMonthlyRatePercent)\s/
+      );
     }
   });
 

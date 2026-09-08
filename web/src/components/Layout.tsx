@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { useMutation } from "@tanstack/react-query";
 import { useAuth } from "../lib/auth";
 import { IS_SNAPSHOT } from "../lib/snapshot";
+import { api } from "../lib/api";
+import { ErrorBanner } from "./ui";
 
 interface NavItem {
   to: string;
@@ -60,6 +63,7 @@ const MOBILE_NAV: NavItem[] = [
 export function Layout() {
   const { user, logout, can } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
   const location = useLocation();
 
   const visible = (item: NavItem) => !item.permission || can(item.permission);
@@ -124,12 +128,21 @@ export function Layout() {
               <div className="text-xs text-slate-500">{user?.roles.join(", ")}</div>
             </div>
             {!IS_SNAPSHOT && (
+              <button onClick={() => setChangingPassword(true)} className="btn-secondary text-xs">
+                變更密碼
+              </button>
+            )}
+            {!IS_SNAPSHOT && (
               <button onClick={logout} className="btn-secondary text-xs">
                 登出
               </button>
             )}
           </div>
         </header>
+
+        {changingPassword && (
+          <ChangePasswordModal onClose={() => setChangingPassword(false)} />
+        )}
 
         {/* Mobile drawer */}
         {menuOpen && (
@@ -186,6 +199,102 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
+      </div>
+    </div>
+  );
+}
+
+/** Self-service only — there is no "set someone else's password" path, even for USER_MANAGE. */
+function ChangePasswordModal({ onClose }: { onClose: () => void }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [done, setDone] = useState(false);
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      api("/api/auth/change-password", { method: "POST", body: { currentPassword, newPassword } }),
+    onSuccess: () => setDone(true),
+  });
+
+  const mismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
+  const tooShort = newPassword.length > 0 && newPassword.length < 10;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+      <div className="w-full max-w-sm rounded-2xl bg-white p-6">
+        <h2 className="text-lg font-semibold">變更密碼</h2>
+
+        {done ? (
+          <>
+            <p className="mt-3 text-sm text-emerald-700">密碼已更新。</p>
+            <div className="mt-4 flex justify-end">
+              <button className="btn-primary" onClick={onClose}>
+                關閉
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="label" htmlFor="pwd-current">目前密碼</label>
+                <input
+                  id="pwd-current"
+                  type="password"
+                  className="input"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  autoComplete="current-password"
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="pwd-new">新密碼（至少 10 碼）</label>
+                <input
+                  id="pwd-new"
+                  type="password"
+                  className="input"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  autoComplete="new-password"
+                />
+                {tooShort && <p className="mt-1 text-xs text-rose-600">新密碼至少需要 10 碼</p>}
+              </div>
+              <div>
+                <label className="label" htmlFor="pwd-confirm">確認新密碼</label>
+                <input
+                  id="pwd-confirm"
+                  type="password"
+                  className="input"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
+                />
+                {mismatch && <p className="mt-1 text-xs text-rose-600">兩次輸入的新密碼不一致</p>}
+              </div>
+            </div>
+
+            <ErrorBanner error={mutation.error} />
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="btn-secondary" onClick={onClose}>
+                取消
+              </button>
+              <button
+                className="btn-primary"
+                disabled={
+                  mutation.isPending ||
+                  !currentPassword ||
+                  newPassword.length < 10 ||
+                  newPassword !== confirmPassword
+                }
+                onClick={() => mutation.mutate()}
+              >
+                {mutation.isPending ? "更新中…" : "更新密碼"}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

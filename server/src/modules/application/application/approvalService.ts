@@ -3,6 +3,8 @@ import { Money } from "../../../shared/money.js";
 import { ApplicationNotFoundError, ValidationError } from "../../../shared/errors.js";
 import type { AuditContext, AuditService } from "../../audit/application/auditService.js";
 import { ApplicationStateMachine, type ApplicationStatus } from "../domain/applicationStateMachine.js";
+import type { ShopSettingsService } from "../../shop/application/shopSettingsService.js";
+import type { RateUnit } from "../../repayment/domain/interestEngine.js";
 
 export interface ApprovalCondition {
   code: string;
@@ -25,7 +27,8 @@ export interface ApproveInput {
 export class ApprovalService {
   constructor(
     private readonly db: PrismaClient,
-    private readonly audit: AuditService
+    private readonly audit: AuditService,
+    private readonly shopSettings: ShopSettingsService
   ) {}
 
   async approve(applicationId: string, input: ApproveInput, context: AuditContext) {
@@ -54,6 +57,11 @@ export class ApprovalService {
     if (!approvedAmount.isPositive()) {
       throw new ValidationError("approvedAmount must be positive");
     }
+
+    // Shop-wide rate ceiling (店規). A manager overriding the rate at
+    // approval time is still bound by it — the override field is for
+    // negotiating within policy, not around it.
+    await this.shopSettings.assertWithinCap(approvedRatePercent, offer.rateUnit as RateUnit);
 
     const conditions = input.conditions ?? [];
     const decision = conditions.length > 0 ? "CONDITIONAL" : "APPROVED";

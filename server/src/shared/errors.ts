@@ -150,6 +150,25 @@ export class LoanLimitExceededError extends DomainError {
   }
 }
 
+export class RateCapExceededError extends DomainError {
+  constructor(requestedMonthlyEquivalent: number, capMonthlyEquivalent: number) {
+    super(
+      "RATE_CAP_EXCEEDED",
+      `Rate ${requestedMonthlyEquivalent.toFixed(4)}%/month equivalent exceeds the shop's cap of ${capMonthlyEquivalent.toFixed(4)}%/month`,
+      422,
+      { requestedMonthlyEquivalent, capMonthlyEquivalent }
+    );
+  }
+}
+
+export class DailyCloseLockedError extends DomainError {
+  constructor(date: string) {
+    super("DAILY_CLOSE_LOCKED", `${date} has been closed; its records can no longer be changed`, 409, {
+      date,
+    });
+  }
+}
+
 /**
  * True when Prisma refused a write because a unique index already held the
  * value — the signal that a concurrent request won an idempotency race.

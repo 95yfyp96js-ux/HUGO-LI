@@ -9,6 +9,7 @@ import {
   isSettlementPolicy,
   type SettlementPolicy,
 } from "../../repayment/domain/settlementPolicy.js";
+import type { ShopSettingsService } from "../../shop/application/shopSettingsService.js";
 
 export interface CreateProductInput {
   productCode: string;
@@ -70,7 +71,8 @@ function isTermUnit(value: string): value is TermUnit {
 export class ProductService {
   constructor(
     private readonly db: PrismaClient,
-    private readonly audit: AuditService
+    private readonly audit: AuditService,
+    private readonly shopSettings: ShopSettingsService
   ) {}
 
   async create(input: CreateProductInput, context: AuditContext) {
@@ -98,6 +100,10 @@ export class ProductService {
     if (!input.productCode?.trim()) throw new ValidationError("productCode is required");
     if (!input.name?.trim()) throw new ValidationError("name is required");
     if (!input.repaymentMethod) throw new ValidationError("repaymentMethod is required");
+
+    // Shop-wide rate ceiling (店規). Checked before anything is written, not
+    // after — a product that fails this must not exist even transiently.
+    await this.shopSettings.assertWithinCap(input.ratePercent, input.rateUnit);
 
     // A new product always starts at version 1, so a repeated code collides
     // with the unique (productCode, version) index. Checked up front for a
@@ -197,6 +203,13 @@ export class ProductService {
 
       return updated;
     }
+
+    // Shop-wide rate ceiling (店規), checked against the version actually
+    // being written — not the one it replaces.
+    await this.shopSettings.assertWithinCap(
+      input.ratePercent ?? existing.ratePercent,
+      (input.rateUnit ?? existing.rateUnit) as CreateProductInput["rateUnit"]
+    );
 
     const newVersion = await this.db.$transaction(async (tx) => {
       const created = await tx.loanProduct.create({

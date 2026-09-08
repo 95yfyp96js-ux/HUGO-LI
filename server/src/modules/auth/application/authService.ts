@@ -1,8 +1,9 @@
 import type { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
-import { DomainError } from "../../../shared/errors.js";
-import { verifyPassword } from "../infrastructure/password.js";
-import { permissionsForRoles, type Permission } from "../domain/permissions.js";
+import { DomainError, ValidationError } from "../../../shared/errors.js";
+import { hashPassword, verifyPassword } from "../infrastructure/password.js";
+import { permissionsForRoles, ROLES, type Permission, type RoleCode } from "../domain/permissions.js";
+import type { AuditContext, AuditService } from "../../audit/application/auditService.js";
 
 export interface AuthenticatedUser {
   id: string;
@@ -13,11 +14,25 @@ export interface AuthenticatedUser {
 }
 
 const TOKEN_TTL = "12h";
+export const MIN_PASSWORD_LENGTH = 10;
+
+function isRoleCode(value: string): value is RoleCode {
+  return (ROLES as readonly string[]).includes(value);
+}
+
+function assertStrongEnough(password: string): void {
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    throw new ValidationError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`, {
+      minLength: MIN_PASSWORD_LENGTH,
+    });
+  }
+}
 
 export class AuthService {
   constructor(
     private readonly db: PrismaClient,
-    private readonly jwtSecret: string
+    private readonly jwtSecret: string,
+    private readonly audit: AuditService
   ) {}
 
   async login(email: string, password: string) {
@@ -102,5 +117,95 @@ export class AuthService {
       name: r.name,
       permissions: r.permissions.map((p) => p.permission.code),
     }));
+  }
+
+  /** USER_MANAGE only. New accounts get whatever password the admin sets. */
+  async createUser(
+    input: { email: string; displayName: string; password: string; roleCodes: string[] },
+    context: AuditContext
+  ) {
+    if (!input.email?.trim()) throw new ValidationError("email is required");
+    if (!input.displayName?.trim()) throw new ValidationError("displayName is required");
+    if (!input.roleCodes?.length) throw new ValidationError("At least one role is required");
+    const badRole = input.roleCodes.find((code) => !isRoleCode(code));
+    if (badRole) throw new ValidationError("Unknown role code", { role: badRole });
+    assertStrongEnough(input.password);
+
+    const existing = await this.db.user.findUnique({ where: { email: input.email } });
+    if (existing) {
+      throw new ValidationError("A user with this email already exists", { email: input.email });
+    }
+
+    const roles = await this.db.role.findMany({ where: { code: { in: input.roleCodes } } });
+
+    const user = await this.db.user.create({
+      data: {
+        email: input.email,
+        displayName: input.displayName,
+        passwordHash: hashPassword(input.password),
+        roles: { create: roles.map((role) => ({ roleId: role.id })) },
+      },
+    });
+
+    await this.audit.record(context, {
+      action: "USER_CREATED",
+      resource: "User",
+      resourceId: user.id,
+      after: { email: user.email, displayName: user.displayName, roles: input.roleCodes },
+    });
+
+    return { id: user.id, email: user.email, displayName: user.displayName, status: user.status };
+  }
+
+  /** USER_MANAGE only. Disabling does not delete anything — it can be undone the same way. */
+  async setUserStatus(userId: string, status: "ACTIVE" | "DISABLED", context: AuditContext) {
+    const existing = await this.db.user.findUnique({ where: { id: userId } });
+    if (!existing) throw new DomainError("USER_NOT_FOUND", "User not found", 404, { userId });
+    if (existing.status === status) return existing;
+
+    const updated = await this.db.user.update({ where: { id: userId }, data: { status } });
+
+    await this.audit.record(context, {
+      action: "USER_STATUS_UPDATED",
+      resource: "User",
+      resourceId: userId,
+      before: { status: existing.status },
+      after: { status },
+    });
+
+    return updated;
+  }
+
+  /**
+   * Anyone changes their own password, and only their own — there is no
+   * "set someone else's password" path, even for USER_MANAGE, so a
+   * compromised admin account cannot silently take over another account.
+   * The current password must be proven first: a left-open session should
+   * not be enough on its own to lock the real owner out.
+   */
+  async changeOwnPassword(
+    userId: string,
+    input: { currentPassword: string; newPassword: string },
+    context: AuditContext
+  ) {
+    const user = await this.db.user.findUnique({ where: { id: userId } });
+    if (!user) throw new DomainError("USER_NOT_FOUND", "User not found", 404, { userId });
+    if (!verifyPassword(input.currentPassword, user.passwordHash)) {
+      throw new DomainError("INVALID_CREDENTIALS", "Current password is incorrect", 401);
+    }
+    assertStrongEnough(input.newPassword);
+
+    await this.db.user.update({
+      where: { id: userId },
+      data: { passwordHash: hashPassword(input.newPassword) },
+    });
+
+    // Never logs the password itself, before or after.
+    await this.audit.record(context, {
+      action: "PASSWORD_CHANGED",
+      resource: "User",
+      resourceId: userId,
+      after: { changedAt: new Date().toISOString() },
+    });
   }
 }

@@ -645,3 +645,41 @@ model IdempotencyRecord {
   responseBody String
   createdAt    DateTime @default(now())
 }
+
+// ---------------------------------------------------------------------------
+// Shop settings
+// ---------------------------------------------------------------------------
+
+// Singleton row (id is always "default"). A shop-wide policy, not a
+// per-product field: it caps every product's rate, present and future,
+// expressed as a monthly-equivalent so a daily, monthly or annual rate can
+// all be checked against the one number (see shared/taipeiDay.js sibling
+// periodRate conversion). Changing it never touches an existing LoanSnapshot
+// — it only gates what may be saved or approved from this point on.
+model ShopSettings {
+  id                     String   @id @default("default")
+  maxMonthlyRatePercent  Float?
+  updatedAt              DateTime @updatedAt
+  updatedBy              String?
+}
+
+// ---------------------------------------------------------------------------
+// Daily close
+// ---------------------------------------------------------------------------
+
+// One row per Asia/Taipei calendar day that has ever been closed. Absence of
+// a row means the day is open. Reopening does not delete the row — it flips
+// status and records who/why, so the close/reopen history is never lost
+// (§74.12 in spirit: history is added to, not rewritten).
+model DailyClose {
+  id           String    @id @default(uuid())
+  date         String    @unique // YYYY-MM-DD, Asia/Taipei
+  status       String    @default("CLOSED") // CLOSED | REOPENED
+  closedAt     DateTime  @default(now())
+  closedBy     String?
+  reopenedAt   DateTime?
+  reopenedBy   String?
+  reopenReason String?
+
+  @@index([date])
+}

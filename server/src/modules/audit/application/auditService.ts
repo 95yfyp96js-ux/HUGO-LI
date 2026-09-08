@@ -24,7 +24,13 @@ export type AuditAction =
   | "SETTLEMENT_CREATED"
   | "PRODUCT_CREATED"
   | "PRODUCT_UPDATED"
-  | "PERMISSION_UPDATED";
+  | "PERMISSION_UPDATED"
+  | "SHOP_RATE_CAP_UPDATED"
+  | "DAILY_CLOSE_CLOSED"
+  | "DAILY_CLOSE_REOPENED"
+  | "USER_CREATED"
+  | "USER_STATUS_UPDATED"
+  | "PASSWORD_CHANGED";
 
 export interface AuditContext {
   userId: string | null;

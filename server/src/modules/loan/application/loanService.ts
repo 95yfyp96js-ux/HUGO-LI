@@ -15,6 +15,7 @@ import type { RateUnit } from "../../repayment/domain/interestEngine.js";
 import { BalanceEngine, type LedgerEntry } from "../domain/balanceEngine.js";
 import { OverdueEngine } from "../domain/overdueEngine.js";
 import type { DisbursementProvider } from "../../disbursement/domain/disbursementProvider.js";
+import { assertDayOpen } from "../../shop/application/dailyCloseService.js";
 
 const SERVICING = ["ACTIVE", "DUE_SOON", "DUE", "OVERDUE", "DEFAULTED"];
 
@@ -224,6 +225,11 @@ export class LoanService {
         requested: amount.toMajorUnitsString(),
       });
     }
+
+    // Checked before the claim, let alone before any money moves: a closed
+    // day refuses a new disbursement outright rather than leaving one
+    // half-claimed.
+    await assertDayOpen(this.db, this.clock.now());
 
     // 1. Claim. A conditional update is atomic in a way that a read followed by
     // a write is not: whoever changes the row from the pre-disbursement status

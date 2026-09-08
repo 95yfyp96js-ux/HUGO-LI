@@ -9,6 +9,7 @@ import {
 } from "../../../shared/errors.js";
 import { formatSequenceNumber } from "../../../shared/ids.js";
 import { resolveTaipeiDay, isBeforeTaipeiDay } from "../../../shared/taipeiDay.js";
+import { assertDayOpen } from "../../shop/application/dailyCloseService.js";
 import type { Clock } from "../../../shared/clock.js";
 import type { AuditContext, AuditService } from "../../audit/application/auditService.js";
 import { AllocationEngine } from "../domain/allocationEngine.js";
@@ -245,6 +246,10 @@ export class PaymentService {
     };
 
     return await this.db.$transaction(async (tx) => {
+      // Checked inside the transaction, against the same client that writes
+      // the payment, so a close racing this write cannot land in between.
+      await assertDayOpen(tx, paidAt);
+
       const created = await tx.payment.create({
         data: {
           paymentNumber: formatSequenceNumber("PMT", sequence),
@@ -361,6 +366,11 @@ export class PaymentService {
     const occurredAt = this.clock.now();
 
     const reversed = await this.db.$transaction(async (tx) => {
+      // The payment's OWN day, not today: reversing changes that day's 實收,
+      // so it is that day's close that governs whether this may happen —
+      // even if today, a different day, happens to be closed.
+      await assertDayOpen(tx, payment.paidAt);
+
       // Compare-and-set, not update-by-id. The status was read outside this
       // transaction, so by now another reversal may already have run: an
       // unconditional update would credit the borrower's balance back twice

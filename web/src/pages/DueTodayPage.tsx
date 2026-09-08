@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, tokenStore } from "../lib/api";
 import { date, money } from "../lib/format";
 import { DataTable, ErrorBanner, Loading, PageHeader } from "../components/ui";
 import { useAuth } from "../lib/auth";
+import { IS_SNAPSHOT } from "../lib/snapshot";
 
 interface DueTodayItem {
   loanId: string;
@@ -32,8 +33,24 @@ interface DueTodayResponse {
   };
 }
 
+interface DailyCloseStatus {
+  date: string;
+  status: "OPEN" | "CLOSED" | "REOPENED";
+}
+
 function todayString(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+const CLOSE_STATUS_LABEL: Record<DailyCloseStatus["status"], string> = {
+  OPEN: "尚未關帳",
+  CLOSED: "已關帳",
+  REOPENED: "已重新開放",
+};
+
+/** Writes are blocked only when the row's own day is CLOSED — REOPENED still accepts new records. */
+function isLocked(status: DailyCloseStatus["status"] | undefined): boolean {
+  return status === "CLOSED";
 }
 
 /**
@@ -50,12 +67,56 @@ function todayString(): string {
  */
 export function DueTodayPage() {
   const { can } = useAuth();
+  const queryClient = useQueryClient();
   const [selectedDate, setSelectedDate] = useState(todayString());
+  const [reopening, setReopening] = useState(false);
+  const [reopenReason, setReopenReason] = useState("");
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["payments", "due-today", selectedDate],
     queryFn: () => api<DueTodayResponse>("/api/payments/due-today", { query: { date: selectedDate } }),
   });
+
+  const { data: closeStatus } = useQuery({
+    queryKey: ["daily-close", selectedDate],
+    queryFn: () => api<DailyCloseStatus>(`/api/daily-close/${selectedDate}`),
+  });
+
+  const invalidateClose = () =>
+    queryClient.invalidateQueries({ queryKey: ["daily-close", selectedDate] });
+
+  const closeMutation = useMutation({
+    mutationFn: () => api(`/api/daily-close/${selectedDate}/close`, { method: "POST" }),
+    onSuccess: invalidateClose,
+  });
+
+  const reopenMutation = useMutation({
+    mutationFn: () =>
+      api(`/api/daily-close/${selectedDate}/reopen`, {
+        method: "POST",
+        body: { reason: reopenReason },
+      }),
+    onSuccess: () => {
+      setReopening(false);
+      setReopenReason("");
+      invalidateClose();
+    },
+  });
+
+  async function downloadCsv() {
+    const token = tokenStore.get();
+    const response = await fetch(`/api/payments/due-today/export?date=${selectedDate}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) return;
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `daily-close-${selectedDate}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div>
@@ -75,7 +136,51 @@ export function DueTodayPage() {
         <button className="btn-secondary" onClick={() => setSelectedDate(todayString())}>
           回到今天
         </button>
+
+        {closeStatus && (
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-medium ${
+              closeStatus.status === "CLOSED"
+                ? "bg-slate-800 text-white"
+                : closeStatus.status === "REOPENED"
+                  ? "bg-amber-100 text-amber-700"
+                  : "bg-emerald-100 text-emerald-700"
+            }`}
+          >
+            {CLOSE_STATUS_LABEL[closeStatus.status]}
+          </span>
+        )}
+
+        <div className="ml-auto flex gap-2">
+          {!IS_SNAPSHOT && (
+            <button className="btn-secondary" onClick={downloadCsv}>
+              下載 CSV
+            </button>
+          )}
+          {can("DAILY_CLOSE_MANAGE") && closeStatus?.status !== "CLOSED" && (
+            <button
+              className="btn-primary"
+              disabled={closeMutation.isPending}
+              onClick={() => closeMutation.mutate()}
+            >
+              {closeMutation.isPending ? "關帳中…" : "關閉這天"}
+            </button>
+          )}
+          {can("DAILY_CLOSE_MANAGE") && closeStatus?.status === "CLOSED" && (
+            <button className="btn-secondary" onClick={() => setReopening(true)}>
+              重新開放
+            </button>
+          )}
+        </div>
       </div>
+
+      {isLocked(closeStatus?.status) && (
+        <div className="mb-4 rounded-lg border border-slate-300 bg-slate-50 p-3 text-sm text-slate-700">
+          這天已關帳：收款、沖銷、撥款紀錄不可再變更。如需修改，請先由主管重新開放並填寫原因。
+        </div>
+      )}
+
+      <ErrorBanner error={closeMutation.error} />
 
       {data && (
         <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-3">
@@ -155,7 +260,7 @@ export function DueTodayPage() {
             {
               header: "",
               cell: (row) =>
-                can("PAYMENT_CREATE") ? (
+                can("PAYMENT_CREATE") && !isLocked(closeStatus?.status) ? (
                   <Link to={`/payments/new?loanId=${row.loanId}`} className="btn-secondary">
                     登記收款
                   </Link>
@@ -163,6 +268,37 @@ export function DueTodayPage() {
             },
           ]}
         />
+      )}
+
+      {reopening && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6">
+            <h2 className="text-lg font-semibold">重新開放 {selectedDate}</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              重新開放後，這天的收款／沖銷／撥款紀錄才能再變更。原因會記錄於稽核軌跡。
+            </p>
+            <textarea
+              className="input mt-4"
+              rows={3}
+              value={reopenReason}
+              onChange={(e) => setReopenReason(e.target.value)}
+              placeholder="請說明重新開放的原因"
+            />
+            <ErrorBanner error={reopenMutation.error} />
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="btn-secondary" onClick={() => setReopening(false)}>
+                取消
+              </button>
+              <button
+                className="btn-primary"
+                disabled={!reopenReason.trim() || reopenMutation.isPending}
+                onClick={() => reopenMutation.mutate()}
+              >
+                {reopenMutation.isPending ? "處理中…" : "確認重新開放"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

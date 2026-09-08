@@ -71,6 +71,8 @@ async function reset() {
     prisma.customerNote.deleteMany(),
     prisma.document.deleteMany(),
     prisma.idempotencyRecord.deleteMany(),
+    prisma.dailyClose.deleteMany(),
+    prisma.shopSettings.deleteMany(),
     prisma.customer.deleteMany(),
     prisma.userRole.deleteMany(),
     prisma.rolePermission.deleteMany(),

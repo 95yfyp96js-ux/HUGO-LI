@@ -73,6 +73,53 @@ npm run dev:web        # 前端畫面，連接埠 5173
 用 `manager@lending.local` 到 **收款 → 新增收款**，對這筆放款收 `100700`，
 放款狀態會變成已結清。
 
+## 資料庫檔案與備份
+
+> 這套系統用 SQLite：整個資料庫就是硬碟上的**一個檔案**，沒有另外的資料庫伺服器。
+
+**資料庫檔在哪：**
+
+```
+server/prisma/dev.db
+```
+
+路徑來自 `server/.env` 的 `DATABASE_URL="file:./dev.db"`，相對於
+`server/prisma/schema.prisma` 所在的資料夾解析，所以實際檔案就在
+`server/prisma/dev.db`。同資料夾底下的 `dev.db-journal`（如果存在）是
+SQLite 寫入中的暫存檔，不是額外的資料庫，不用另外備份。
+
+**怎麼複製備份：**
+
+1. 先確認 `npm run dev:server` 已經**停掉**（或至少確定當下沒有人在操作系統寫入資料），
+   再複製檔案，避免複製到寫一半的狀態：
+
+   ```bash
+   cp server/prisma/dev.db server/prisma/backups/dev-$(date +%Y%m%d-%H%M).db
+   ```
+
+2. 若系統一定要邊跑邊備份，改用 SQLite 自己的線上備份指令（比直接 `cp` 安全，
+   會等寫入完成才拷貝）：
+
+   ```bash
+   sqlite3 server/prisma/dev.db ".backup 'server/prisma/backups/dev-$(date +%Y%m%d-%H%M).db'"
+   ```
+
+3. 備份檔就是一個獨立、可直接使用的資料庫檔案。要還原，就把它複製回
+   `server/prisma/dev.db`（先把後端伺服器停掉再換檔）。
+
+**不要多台同時寫同一個 SQLite：**
+
+SQLite 是單一檔案、單一寫入者的設計。同一時間只能有一個 `dev:server`
+行程對這個檔案寫入；如果兩台電腦（或同一台的兩個行程）同時指向同一個
+`dev.db` 並且都在寫（登記收款、核准、撥款等），會遇到鎖檔錯誤，
+嚴重時可能造成資料損毀。實務上：
+
+- 這個檔案只能給**一個**正在執行中的後端行程使用。
+- 不要把 `dev.db` 放在多人同時掛載寫入的網路磁碟機／雲端同步資料夾
+  （如 Dropbox、Google 雲端硬碟即時同步）並讓多台機器同時開著伺服器。
+- 要換一台電腦繼續營業，先把舊機器的伺服器完全關閉，複製 `dev.db`
+  過去，再啟動新機器的伺服器。
+
 ## Commands
 
 | Command | What it does |

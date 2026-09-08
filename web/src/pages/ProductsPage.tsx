@@ -32,6 +32,93 @@ export interface Product {
   feeRules: Array<{ code: string; label: string; type: string; value: number }>;
 }
 
+interface RateCapResponse {
+  maxMonthlyRatePercent: number | null;
+}
+
+/**
+ * 店規：利率上限. One shop-wide number, expressed as its monthly-equivalent,
+ * that every product's rate is checked against regardless of whether that
+ * product is quoted daily, monthly or annually — ProductService converts
+ * before comparing, so this input is always "as if quoted per month".
+ */
+function RateCapCard({ canEdit }: { canEdit: boolean }) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["settings", "rate-cap"],
+    queryFn: () => api<RateCapResponse>("/api/settings/rate-cap"),
+  });
+
+  const mutation = useMutation({
+    mutationFn: (maxMonthlyRatePercent: number | null) =>
+      api<RateCapResponse>("/api/settings/rate-cap", {
+        method: "PUT",
+        body: { maxMonthlyRatePercent },
+      }),
+    onSuccess: () => {
+      setEditing(false);
+      queryClient.invalidateQueries({ queryKey: ["settings", "rate-cap"] });
+    },
+  });
+
+  function openEdit() {
+    setValue(data?.maxMonthlyRatePercent != null ? String(data.maxMonthlyRatePercent) : "");
+    setEditing(true);
+  }
+
+  return (
+    <div className="card mb-4 flex flex-wrap items-center justify-between gap-3 p-4">
+      <div>
+        <div className="text-xs font-medium text-slate-500">店規：利率上限（月息換算）</div>
+        {isLoading ? (
+          <div className="mt-1 text-sm text-slate-400">載入中…</div>
+        ) : editing ? (
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              className="input tabular w-32"
+              inputMode="decimal"
+              placeholder="不限則留空"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+            />
+            <span className="text-sm text-slate-500">% / 月</span>
+          </div>
+        ) : (
+          <div className="tabular mt-1 text-xl font-semibold text-slate-900">
+            {data?.maxMonthlyRatePercent != null ? `${data.maxMonthlyRatePercent}% / 月` : "未設定上限"}
+          </div>
+        )}
+        <ErrorBanner error={mutation.error} />
+      </div>
+      {canEdit && (
+        <div className="flex gap-2">
+          {editing ? (
+            <>
+              <button className="btn-secondary" onClick={() => setEditing(false)}>
+                取消
+              </button>
+              <button
+                className="btn-primary"
+                disabled={mutation.isPending}
+                onClick={() => mutation.mutate(value.trim() === "" ? null : Number(value))}
+              >
+                {mutation.isPending ? "儲存中…" : "儲存"}
+              </button>
+            </>
+          ) : (
+            <button className="btn-secondary" onClick={openEdit}>
+              設定上限
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ProductsPage() {
   const { can } = useAuth();
   const queryClient = useQueryClient();
@@ -78,6 +165,8 @@ export function ProductsPage() {
           )
         }
       />
+
+      <RateCapCard canEdit={can("PRODUCT_UPDATE")} />
 
       <ErrorBanner error={error} />
       {isLoading ? (

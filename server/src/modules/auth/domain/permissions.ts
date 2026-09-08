@@ -23,6 +23,11 @@ export const PERMISSIONS = [
   "PRODUCT_UPDATE",
   "USER_MANAGE",
   "AUDIT_READ",
+  // Locking/unlocking a day's financial records is a distinct, high-stakes
+  // capability — kept separate from PRODUCT_UPDATE or PAYMENT_CREATE rather
+  // than folded into either, so who can freeze the books is readable on its
+  // own.
+  "DAILY_CLOSE_MANAGE",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -70,6 +75,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, Permission[]> = {
     // editing a live product in place (see productService.update).
     "PRODUCT_UPDATE",
     "AUDIT_READ",
+    "DAILY_CLOSE_MANAGE",
   ],
 
   // Originates business but cannot approve its own deals, move product

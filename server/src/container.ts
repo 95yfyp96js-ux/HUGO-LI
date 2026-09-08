@@ -16,6 +16,8 @@ import { RenewalService } from "./modules/renewal/application/renewalService.js"
 import { PortfolioService } from "./modules/portfolio/application/portfolioService.js";
 import { ProductService } from "./modules/product/application/productService.js";
 import { AuthService } from "./modules/auth/application/authService.js";
+import { ShopSettingsService } from "./modules/shop/application/shopSettingsService.js";
+import { DailyCloseService } from "./modules/shop/application/dailyCloseService.js";
 import {
   MockDisbursementProvider,
   type DisbursementProvider,
@@ -39,6 +41,8 @@ export interface Container {
   renewals: RenewalService;
   portfolio: PortfolioService;
   products: ProductService;
+  shopSettings: ShopSettingsService;
+  dailyClose: DailyCloseService;
   identityScanner: IdentityScanner;
 }
 
@@ -66,16 +70,17 @@ export function createContainer(options: ContainerOptions = {}): Container {
   const audit = new AuditService(db);
   const risk = new RiskService(db, audit, clock);
   const pricing = new PricingService(db, audit);
+  const shopSettings = new ShopSettingsService(db, audit);
 
   return {
     db,
     clock,
     audit,
-    auth: new AuthService(db, jwtSecret),
+    auth: new AuthService(db, jwtSecret, audit),
     customers: new CustomerService(db, audit),
     customer360: new Customer360Service(db, clock),
     applications: new LendingApplicationService(db, audit, risk, pricing),
-    approvals: new ApprovalService(db, audit),
+    approvals: new ApprovalService(db, audit, shopSettings),
     risk,
     pricing,
     loans: new LoanService(db, audit, clock, disbursementProvider),
@@ -83,7 +88,9 @@ export function createContainer(options: ContainerOptions = {}): Container {
     collections: new CollectionService(db, audit, clock),
     renewals: new RenewalService(db, audit, clock, risk, pricing),
     portfolio: new PortfolioService(db, clock),
-    products: new ProductService(db, audit),
+    products: new ProductService(db, audit, shopSettings),
+    shopSettings,
+    dailyClose: new DailyCloseService(db, audit),
     identityScanner,
   };
 }
