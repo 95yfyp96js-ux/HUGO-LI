@@ -1,0 +1,20 @@
+@import './styles/tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  這個產品只有一種光線狀態：夜。
+  不做淺色模式、不跟隨系統主題——這不是「深色模式」，這是這個產品的樣子。
+*/
+body {
+  @apply bg-void text-ash-100 font-body antialiased;
+}
+
+/* 表單元件在夜裡的預設樣子：沒有實心底色，只有一條被微光照到的底線 */
+textarea,
+input[type='text'],
+input[type='tel'] {
+  @apply bg-transparent text-ash-100 placeholder:text-ash-700;
+}
