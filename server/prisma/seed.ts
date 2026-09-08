@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 const prisma = new PrismaClient();
 
 const SEED_START = new Date("2026-01-05T09:00:00Z");
-const TODAY = new Date("2026-09-07T09:00:00Z");
+const TODAY = new Date("2026-09-08T09:00:00Z");
 
 const FIRST_NAMES = ["建宏", "怡君", "志明", "淑芬", "家豪", "美玲", "俊傑", "雅婷", "承翰", "宜蓁"];
 const SURNAMES = ["林", "陳", "黃", "張", "李", "王", "吳", "劉", "蔡", "楊"];
@@ -51,6 +51,7 @@ async function reset() {
     prisma.settlement.deleteMany(),
     prisma.extension.deleteMany(),
     prisma.renewal.deleteMany(),
+    prisma.scheduleLineAllocation.deleteMany(),
     prisma.paymentAllocation.deleteMany(),
     prisma.payment.deleteMany(),
     prisma.moneyEvent.deleteMany(),
@@ -383,6 +384,115 @@ async function main() {
     }
   }
 
+  // Four named, easy-to-recognise accounts that exercise exactly the four
+  // 日結 (daily close) cases against TODAY — every other seeded loan is
+  // randomised, so these are the ones a screen and the accounting can be
+  // checked against by eye. All on the day-term product, so the due date is
+  // exact rather than dependent on a monthly calendar.
+  console.log("Seeding named daily-close examples...");
+  const dailyProduct = products.find((p) => p.productCode === "SL-DAILY")!;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const DAILY_CLOSE_EXAMPLE_NAMES = ["王應收", "李繳清", "陳補繳", "林逾期"];
+
+  async function seedDailyCloseExample(input: {
+    name: string;
+    identityNumber: string;
+    termDays: number;
+    originOffsetDays: number;
+    payOffsetDaysFromToday: number | null;
+  }) {
+    const origin = new Date(TODAY.getTime() - input.originOffsetDays * DAY_MS);
+    clock.set(origin);
+    const customer = await container.customers.create(
+      {
+        name: input.name,
+        identityNumber: input.identityNumber,
+        dateOfBirth: "1990-01-01",
+        phone: `09${String(randomInt(10000000, 99999999))}`,
+        email: null,
+        address: "台北市信義區示範路 1 號",
+        employmentStatus: "EMPLOYED",
+        employer: "示範公司",
+        monthlyIncome: 80000,
+      },
+      officerContext
+    );
+    const application = await container.applications.create(
+      {
+        customerId: customer.id,
+        requestedProductId: dailyProduct.id,
+        requestedAmount: 50000,
+        requestedTermCount: input.termDays,
+        purpose: "日結範例",
+        income: 80000,
+        existingDebt: 0,
+      },
+      officerContext
+    );
+    await container.applications.submit(application.id, officerContext);
+    await container.approvals.approve(application.id, { reason: "示範案件" }, managerContext);
+    const loan = await container.loans.createFromApprovedApplication(application.id, managerContext);
+    await container.loans.disburse(
+      loan.id,
+      { method: "BANK_TRANSFER", idempotencyKey: `seed-daily-close-${loan.id}` },
+      managerContext
+    );
+
+    if (input.payOffsetDaysFromToday !== null) {
+      clock.set(new Date(TODAY.getTime() - input.payOffsetDaysFromToday * DAY_MS));
+      const outstanding = await container.payments.getOutstanding(loan.id);
+      const total = outstanding.principal.add(outstanding.interest).add(outstanding.fees);
+      await container.payments.create(
+        {
+          loanId: loan.id,
+          amount: total.toMajorUnitsString(),
+          method: "CASH",
+          idempotencyKey: `seed-daily-close-payment-${loan.id}`,
+        },
+        officerContext
+      );
+    }
+
+    return loan;
+  }
+
+  // 王應收: due today, unpaid — appears only in today's 應收.
+  await seedDailyCloseExample({
+    name: "王應收",
+    identityNumber: "P100000001",
+    termDays: 7,
+    originOffsetDays: 7, // origin 7 days ago + 7-day term = due today
+    payOffsetDaysFromToday: null,
+  });
+
+  // 李繳清: due today, paid today — visible in both 應收 and 實收, 未收 0.
+  await seedDailyCloseExample({
+    name: "李繳清",
+    identityNumber: "P100000002",
+    termDays: 7,
+    originOffsetDays: 7,
+    payOffsetDaysFromToday: 0,
+  });
+
+  // 陳補繳: due yesterday, paid today — counts in today's 實收 but not
+  // today's 應收; viewing yesterday's close still shows it uncollected.
+  await seedDailyCloseExample({
+    name: "陳補繳",
+    identityNumber: "P100000003",
+    termDays: 7,
+    originOffsetDays: 8, // due date lands one day before TODAY
+    payOffsetDaysFromToday: 0, // but paid at TODAY, a day late
+  });
+
+  // 林逾期: due five days ago, still unpaid — plainly overdue.
+  await seedDailyCloseExample({
+    name: "林逾期",
+    identityNumber: "P100000004",
+    termDays: 7,
+    originOffsetDays: 12, // due date lands five days before TODAY
+    payOffsetDaysFromToday: null,
+  });
+
   // Bring every loan's delinquency state up to "today".
   console.log("Ageing portfolio to current date...");
   clock.set(TODAY);
@@ -423,22 +533,34 @@ async function main() {
   }
 
   console.log("Creating renewals...");
+  // Excludes the four named daily-close examples above: they exist to match
+  // an exact, readable set of numbers, and a seed-time renewal or extension
+  // would silently replace one with a different loan.
   const renewable = await prisma.loan.findMany({
-    where: { status: { in: ["ACTIVE", "DUE_SOON", "DUE"] } },
+    where: {
+      status: { in: ["ACTIVE", "DUE_SOON", "DUE"] },
+      customer: { name: { notIn: DAILY_CLOSE_EXAMPLE_NAMES } },
+    },
     take: 10,
     orderBy: { createdAt: "asc" },
   });
   for (const loan of renewable) {
+    // No termCount override: it defaults to the loan's own current term,
+    // which is always within its product's range. A fixed literal here broke
+    // as soon as a day-term product (min 7 days) reached this loop.
     await container.renewals.renew(
       loan.id,
-      { reason: "客戶申請續借，延長還款期間", termCount: 3, idempotencyKey: `seed-renew-${loan.id}` },
+      { reason: "客戶申請續借，延長還款期間", idempotencyKey: `seed-renew-${loan.id}` },
       managerContext
     );
   }
 
   console.log("Creating extensions...");
   const extendable = await prisma.loan.findMany({
-    where: { status: { in: ["OVERDUE", "DUE"] } },
+    where: {
+      status: { in: ["OVERDUE", "DUE"] },
+      customer: { name: { notIn: DAILY_CLOSE_EXAMPLE_NAMES } },
+    },
     take: 4,
   });
   for (const loan of extendable) {

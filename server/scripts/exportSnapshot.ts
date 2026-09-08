@@ -101,6 +101,11 @@ async function main() {
 
   console.log("Capturing payments, collections, renewals, products, admin…");
   await capture(token, "/api/payments?take=50");
+  // Captured with no date param, so the snapshot's fallback lookup (any
+  // future date query still resolves to this same bare key) always serves
+  // this — the day-close numbers are frozen at export time, whatever date a
+  // later viewer's browser happens to default to.
+  await capture(token, "/api/payments/due-today");
   const collections = (await capture(token, "/api/collections?take=50")) as {
     items: Array<{ id: string }>;
   };
