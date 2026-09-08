@@ -126,6 +126,14 @@ async function main() {
     await capture(token, `/api/products/${product.id}`);
   }
 
+  // Captured with no query (calendar) / a deliberately wide range (schedule),
+  // so the snapshot's fallback lookup (any query variant of the same
+  // resource resolves to whatever was captured) always serves this,
+  // regardless of what date range a later viewer's browser defaults to —
+  // same convention as due-today above.
+  await capture(token, "/api/payments/calendar");
+  await capture(token, "/api/payments/schedule?from=2020-01-01&to=2035-12-31");
+
   await capture(token, "/api/settings/users");
   await capture(token, "/api/settings/roles");
   await capture(token, "/api/audit-logs?take=100");
