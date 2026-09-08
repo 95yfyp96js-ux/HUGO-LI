@@ -1,0 +1,14 @@
+name: ledger
+description: Small Lending OS append-only ledger - entries, replay, dashboard aggregation.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  meta: ^1.15.0
+
+dev_dependencies:
+  lints: ^4.0.0
+  test: ^1.25.0

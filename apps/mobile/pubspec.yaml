@@ -1,0 +1,49 @@
+name: mobile
+description: "Small Lending OS - 小額放款帳戶系統（出借人端）"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  flutter_riverpod: ^2.6.1
+  go_router: ^14.8.1
+
+  drift: ^2.22.1
+  sqlite3_flutter_libs: ^0.5.28
+  sqlcipher_flutter_libs: ^0.6.4
+  sqlite3: ^2.7.4
+  path_provider: ^2.1.5
+  path: ^1.9.0
+
+  decimal: ^3.0.2
+  crypto: ^3.0.3
+  encrypt: ^5.0.3
+  uuid: ^4.5.1
+  intl: ^0.20.3
+  shared_preferences: ^2.3.4
+
+  lending_engine:
+    path: ../../packages/lending_engine
+  ledger:
+    path: ../../packages/ledger
+  license:
+    path: ../../packages/license
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  drift_dev: ^2.22.1
+  build_runner: ^2.4.14
+
+flutter:
+  uses-material-design: true

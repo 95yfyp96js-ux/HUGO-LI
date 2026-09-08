@@ -1,0 +1,542 @@
+import 'package:drift/drift.dart';
+import 'package:ledger/ledger.dart' as ledger;
+import 'package:lending_engine/lending_engine.dart' as engine;
+
+import '../db/app_database.dart';
+import 'enum_mapping.dart';
+import 'id_gen.dart';
+
+class IllegalLoanTransitionException implements Exception {
+  IllegalLoanTransitionException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+/// 貸款登記、計畫產生、撥款確認、還款入帳（見 spec §1、§4、§6、§8）。
+///
+/// - 建約（[registerLoan]）與撥款（[confirmDisbursement]）是分開的動作
+///   （spec §6）。
+/// - [confirmDisbursement] 前 Schedule 皆可重算；之後才開始寫入
+///   `DISBURSEMENT` 分錄並鎖定 `ruleVersion`（不變式 2、4）。
+/// - [recordPayment] 依固定瀑布順序（罰息→費用→利息→本金）逐期（由舊到新）
+///   沖銷，溢收另計為調整分錄（見 docs/interest-rules.md §6）。
+class LoanRepository {
+  LoanRepository(this._db);
+
+  final AppDatabase _db;
+
+  Future<List<Loan>> listAll() => (_db.select(
+    _db.loans,
+  )..orderBy([(t) => OrderingTerm.desc(t.createdAt)])).get();
+
+  Stream<List<Loan>> watchAll() => (_db.select(
+    _db.loans,
+  )..orderBy([(t) => OrderingTerm.desc(t.createdAt)])).watch();
+
+  Future<Loan?> findById(String id) =>
+      (_db.select(_db.loans)..where((t) => t.id.equals(id))).getSingleOrNull();
+
+  Future<List<ScheduleItem>> scheduleFor(String loanId) =>
+      (_db.select(_db.scheduleItems)
+            ..where((t) => t.loanId.equals(loanId))
+            ..orderBy([(t) => OrderingTerm.asc(t.periodNumber)]))
+          .get();
+
+  Stream<List<ScheduleItem>> watchScheduleFor(String loanId) =>
+      (_db.select(_db.scheduleItems)
+            ..where((t) => t.loanId.equals(loanId))
+            ..orderBy([(t) => OrderingTerm.asc(t.periodNumber)]))
+          .watch();
+
+  Future<List<LedgerEntryRow>> ledgerFor(String loanId) =>
+      (_db.select(_db.ledgerEntries)
+            ..where((t) => t.loanId.equals(loanId))
+            ..orderBy([(t) => OrderingTerm.asc(t.postedAt)]))
+          .get();
+
+  Future<List<LedgerEntryRow>> allLedgerEntries() =>
+      _db.select(_db.ledgerEntries).get();
+
+  /// 登記貸款＋建約＋自動生成計畫（四步上手第 2、3 步）。狀態機驅動至
+  /// `ACCEPTED`（撥款前最後一站），尚未寫入任何分錄、尚未開始計息。
+  Future<Loan> registerLoan({
+    required String borrowerId,
+    required int principalCents,
+    required engine.RepaymentMethod method,
+    required engine.RateType rateType,
+    required int rateBps,
+    required engine.DayCount dayCount,
+    required int tenorPeriods,
+    required DateTime plannedDisbursementDate,
+    int periodDays = 30,
+    int graceDays = 3,
+    bool penaltyEnabled = false,
+    int penaltyRateBps = 600,
+  }) async {
+    final String id = newId();
+    final DateTime now = DateTime.now();
+
+    await _db
+        .into(_db.loans)
+        .insert(
+          LoansCompanion.insert(
+            id: id,
+            borrowerId: borrowerId,
+            principalCents: principalCents,
+            method: method.name,
+            rateType: rateType.name,
+            rateBps: rateBps,
+            dayCount: dayCount.name,
+            tenorPeriods: tenorPeriods,
+            periodDays: Value(periodDays),
+            graceDays: Value(graceDays),
+            penaltyEnabled: Value(penaltyEnabled),
+            penaltyRateBps: Value(penaltyRateBps),
+            status: const Value('draft'),
+            disbursedAt: Value(plannedDisbursementDate),
+            createdAt: now,
+          ),
+        );
+
+    // 建約：DRAFT -> PENDING_DECISION -> APPROVED_CONDITIONAL -> OFFERED -> ACCEPTED。
+    // 系統永不自動核准，這裡只是把「出借人已決定承作」的既成事實推進狀態機
+    // （核貸建議模組若啟用，走 loan_events，不在此流程自動觸發）。
+    await _driveStatus(id, engine.LoanStatus.accepted);
+    await _generateAndPersistSchedule(id, anchorDate: plannedDisbursementDate);
+    await _insertAuditLog('REGISTER_LOAN', 'loan', id, null);
+
+    return (await findById(id))!;
+  }
+
+  /// 確認撥款（四步上手第 4 步）。撥款後才寫入 `DISBURSEMENT` 分錄、開始計息、
+  /// 鎖定 Schedule 的錨定日期。
+  Future<void> confirmDisbursement(String loanId) async {
+    final Loan? loan = await findById(loanId);
+    if (loan == null) throw StateError('找不到貸款 $loanId');
+    final currentStatus = parseLoanStatus(loan.status);
+    if (currentStatus != engine.LoanStatus.accepted) {
+      throw IllegalLoanTransitionException(
+        '貸款狀態為 $currentStatus，需為已接受條件（ACCEPTED）才能確認撥款',
+      );
+    }
+
+    final DateTime now = DateTime.now();
+
+    await _db.transaction(() async {
+      await _generateAndPersistSchedule(loanId, anchorDate: now);
+      await (_db.update(_db.loans)..where((t) => t.id.equals(loanId))).write(
+        LoansCompanion(
+          disbursedAt: Value(now),
+          lastAccrualAt: Value(now),
+          status: const Value('disbursed'),
+        ),
+      );
+      await _driveStatus(loanId, engine.LoanStatus.current);
+
+      await _db
+          .into(_db.ledgerEntries)
+          .insert(
+            LedgerEntriesCompanion.insert(
+              id: newId(),
+              loanId: loanId,
+              type: ledger.LedgerEntryType.disbursement.name,
+              amountCents: loan.principalCents,
+              postedAt: now,
+            ),
+          );
+      await _insertAuditLog(
+        'CONFIRM_DISBURSEMENT',
+        'loan',
+        loanId,
+        '撥款 ${loan.principalCents} 分',
+      );
+    });
+  }
+
+  /// 記一筆還款：依瀑布順序、由舊到新沖銷各期，溢收記為調整分錄
+  /// （見 docs/interest-rules.md §6）。
+  Future<void> recordPayment({
+    required String loanId,
+    required int amountCents,
+    required DateTime paidAt,
+    String? note,
+  }) async {
+    if (amountCents <= 0) throw ArgumentError('繳款金額必須大於 0');
+
+    await runDailyBatch(loanId: loanId, asOf: paidAt);
+
+    final Loan loan = (await findById(loanId))!;
+    final items = await scheduleFor(loanId);
+
+    int remaining = amountCents;
+    final List<(String itemId, ScheduleItemsCompanion companion)> itemUpdates =
+        [];
+    final List<LedgerEntriesCompanion> newEntries = [];
+
+    for (final item in items) {
+      if (remaining <= 0) break;
+      if (item.status == 'paid' ||
+          item.status == 'prepaid' ||
+          item.status == 'waived') {
+        continue;
+      }
+
+      final int interestOwed = item.interestCents - item.interestPaidCents;
+      final int principalOwed = item.principalCents - item.principalPaidCents;
+      if (interestOwed <= 0 && principalOwed <= 0) continue;
+
+      final bool overdue = engine.isPastGrace(
+        dueDate: item.dueDate,
+        graceDays: loan.graceDays,
+        asOf: paidAt,
+      );
+
+      int penaltyOwed = 0;
+      if (loan.penaltyEnabled && overdue) {
+        final penaltySpec = engine.RateSpec(
+          rateType: engine.RateType.annual,
+          rateBps: loan.penaltyRateBps,
+          dayCount: engine.DayCount.act365,
+        );
+        final int accruedTotal = engine.accrueInterestCents(
+          balanceCents: interestOwed + principalOwed,
+          rateSpec: penaltySpec,
+          from: item.dueDate.add(Duration(days: loan.graceDays)),
+          to: paidAt,
+        );
+        final int alreadyBilled = await _sumLedger(
+          loanId,
+          ledger.LedgerEntryType.penalty,
+          item.periodNumber,
+        );
+        penaltyOwed = (accruedTotal - alreadyBilled).clamp(0, 1 << 62);
+      }
+
+      final int payPenalty = remaining < penaltyOwed ? remaining : penaltyOwed;
+      remaining -= payPenalty;
+      final int payInterest = remaining < interestOwed
+          ? remaining
+          : interestOwed;
+      remaining -= payInterest;
+      final int payPrincipal = remaining < principalOwed
+          ? remaining
+          : principalOwed;
+      remaining -= payPrincipal;
+
+      if (payPenalty > 0) {
+        newEntries.add(
+          _ledgerCompanion(
+            loanId,
+            ledger.LedgerEntryType.penalty,
+            payPenalty,
+            paidAt,
+            item.periodNumber,
+          ),
+        );
+      }
+      if (payInterest > 0) {
+        newEntries.add(
+          _ledgerCompanion(
+            loanId,
+            ledger.LedgerEntryType.interest,
+            payInterest,
+            paidAt,
+            item.periodNumber,
+          ),
+        );
+      }
+      if (payPrincipal > 0) {
+        newEntries.add(
+          _ledgerCompanion(
+            loanId,
+            ledger.LedgerEntryType.principal,
+            payPrincipal,
+            paidAt,
+            item.periodNumber,
+          ),
+        );
+      }
+
+      final int newInterestPaid = item.interestPaidCents + payInterest;
+      final int newPrincipalPaid = item.principalPaidCents + payPrincipal;
+      final bool fullyPaid =
+          newInterestPaid >= item.interestCents &&
+          newPrincipalPaid >= item.principalCents;
+
+      final String newStatus;
+      if (fullyPaid) {
+        newStatus = paidAt.isBefore(item.dueDate) ? 'prepaid' : 'paid';
+      } else if (newInterestPaid > 0 || newPrincipalPaid > 0) {
+        newStatus = overdue ? 'overdue' : 'partial';
+      } else {
+        newStatus = overdue ? 'overdue' : 'due';
+      }
+
+      itemUpdates.add((
+        item.id,
+        ScheduleItemsCompanion(
+          interestPaidCents: Value(newInterestPaid),
+          principalPaidCents: Value(newPrincipalPaid),
+          status: Value(newStatus),
+        ),
+      ));
+    }
+
+    await _db.transaction(() async {
+      for (final entry in newEntries) {
+        await _db.into(_db.ledgerEntries).insert(entry);
+      }
+      for (final (itemId, companion) in itemUpdates) {
+        await (_db.update(
+          _db.scheduleItems,
+        )..where((t) => t.id.equals(itemId))).write(companion);
+      }
+      if (remaining > 0) {
+        // 溢收：超過全部應繳金額，記為調整分錄，供人工核對（見 §6 第 5 點）。
+        await _db
+            .into(_db.ledgerEntries)
+            .insert(
+              LedgerEntriesCompanion.insert(
+                id: newId(),
+                loanId: loanId,
+                type: ledger.LedgerEntryType.adjustment.name,
+                amountCents: -remaining,
+                postedAt: paidAt,
+                note: const Value('溢繳（超過全部應繳金額），已記為負向調整分錄待人工核對'),
+              ),
+            );
+      }
+      await _db
+          .into(_db.payments)
+          .insert(
+            PaymentsCompanion.insert(
+              id: newId(),
+              loanId: loanId,
+              amountCents: amountCents,
+              paidAt: paidAt,
+              note: Value(note),
+            ),
+          );
+      await _recomputeLoanStatusAfterPayment(loanId);
+      await _insertAuditLog(
+        'RECORD_PAYMENT',
+        'loan',
+        loanId,
+        '收款 $amountCents 分',
+      );
+    });
+  }
+
+  /// 日結：對 DISBURSED/CURRENT/DELINQUENT 的貸款補逾期判定
+  /// （見 docs/interest-rules.md §5）。
+  Future<void> runDailyBatch({String? loanId, DateTime? asOf}) async {
+    final DateTime now = asOf ?? DateTime.now();
+    final List<Loan> loans;
+    if (loanId != null) {
+      final loan = await findById(loanId);
+      loans = loan == null ? const [] : [loan];
+    } else {
+      loans = await listAll();
+    }
+
+    for (final loan in loans) {
+      final status = parseLoanStatus(loan.status);
+      if (!status.isDisbursed || status.isTerminal) continue;
+
+      final items = await scheduleFor(loan.id);
+      bool anyOverdue = false;
+      for (final item in items) {
+        if (item.status == 'paid' ||
+            item.status == 'prepaid' ||
+            item.status == 'waived') {
+          continue;
+        }
+        final bool overdue = engine.isPastGrace(
+          dueDate: item.dueDate,
+          graceDays: loan.graceDays,
+          asOf: now,
+        );
+        if (overdue) {
+          anyOverdue = true;
+          if (item.status != 'overdue') {
+            await (_db.update(_db.scheduleItems)
+                  ..where((t) => t.id.equals(item.id)))
+                .write(const ScheduleItemsCompanion(status: Value('overdue')));
+          }
+        }
+      }
+
+      final engine.LoanStatus target = anyOverdue
+          ? engine.LoanStatus.delinquent
+          : engine.LoanStatus.current;
+      if (status != target && status.canTransitionTo(target)) {
+        await _driveStatus(loan.id, target);
+      }
+
+      await (_db.update(_db.loans)..where((t) => t.id.equals(loan.id))).write(
+        LoansCompanion(lastAccrualAt: Value(now)),
+      );
+    }
+  }
+
+  Future<void> _recomputeLoanStatusAfterPayment(String loanId) async {
+    final Loan loan = (await findById(loanId))!;
+    final status = parseLoanStatus(loan.status);
+    if (status.isTerminal) return;
+
+    final items = await scheduleFor(loanId);
+    final bool allSettled = items.every(
+      (i) =>
+          i.status == 'paid' || i.status == 'prepaid' || i.status == 'waived',
+    );
+    if (allSettled) {
+      if (status.canTransitionTo(engine.LoanStatus.settled)) {
+        await _driveStatus(loanId, engine.LoanStatus.settled);
+      }
+      return;
+    }
+
+    final bool anyOverdue = items.any((i) => i.status == 'overdue');
+    final engine.LoanStatus target = anyOverdue
+        ? engine.LoanStatus.delinquent
+        : engine.LoanStatus.current;
+    if (status != target && status.canTransitionTo(target)) {
+      await _driveStatus(loanId, target);
+    }
+  }
+
+  /// 依狀態機逐步推進到 [target]（每一步都檢查合法性，不合法立即拋出）。
+  Future<void> _driveStatus(String loanId, engine.LoanStatus target) async {
+    final Loan loan = (await findById(loanId))!;
+    engine.LoanStatus current = parseLoanStatus(loan.status);
+    final List<engine.LoanStatus> path = _pathTo(current, target);
+    for (final step in path) {
+      if (!current.canTransitionTo(step)) {
+        throw IllegalLoanTransitionException('不合法的狀態轉移：$current -> $step');
+      }
+      current = step;
+    }
+    await (_db.update(_db.loans)..where((t) => t.id.equals(loanId))).write(
+      LoansCompanion(status: Value(current.name)),
+    );
+  }
+
+  /// 產生 [from] 到 [to] 的標準路徑（僅覆蓋本 App 會用到的幾條固定路徑）。
+  List<engine.LoanStatus> _pathTo(
+    engine.LoanStatus from,
+    engine.LoanStatus to,
+  ) {
+    const List<engine.LoanStatus> fullForward = [
+      engine.LoanStatus.draft,
+      engine.LoanStatus.pendingDecision,
+      engine.LoanStatus.approvedConditional,
+      engine.LoanStatus.offered,
+      engine.LoanStatus.accepted,
+      engine.LoanStatus.disbursed,
+      engine.LoanStatus.current,
+    ];
+    final fromIndex = fullForward.indexOf(from);
+    final toIndex = fullForward.indexOf(to);
+    if (fromIndex != -1 && toIndex != -1 && toIndex > fromIndex) {
+      return fullForward.sublist(fromIndex + 1, toIndex + 1);
+    }
+    // current <-> delinquent、-> settled 等單步轉移。
+    return [to];
+  }
+
+  Future<void> _generateAndPersistSchedule(
+    String loanId, {
+    required DateTime anchorDate,
+  }) async {
+    final Loan loan = (await findById(loanId))!;
+    final terms = engine.LoanTerms(
+      principalCents: loan.principalCents,
+      method: parseRepaymentMethod(loan.method),
+      rateSpec: engine.RateSpec(
+        rateType: parseRateType(loan.rateType),
+        rateBps: loan.rateBps,
+        dayCount: parseDayCount(loan.dayCount),
+        periodDays: loan.periodDays,
+      ),
+      tenorPeriods: loan.tenorPeriods,
+      disbursedAt: anchorDate,
+      ruleVersion: loan.ruleVersion,
+      graceDays: loan.graceDays,
+    );
+    final result = engine.generateSchedule(terms);
+
+    await _db.transaction(() async {
+      await (_db.delete(
+        _db.scheduleItems,
+      )..where((t) => t.loanId.equals(loanId))).go();
+      for (final item in result.items) {
+        await _db
+            .into(_db.scheduleItems)
+            .insert(
+              ScheduleItemsCompanion.insert(
+                id: newId(),
+                loanId: loanId,
+                periodNumber: item.periodNumber,
+                dueDate: item.dueDate,
+                openingBalanceCents: item.openingBalanceCents,
+                principalCents: item.principalCents,
+                interestCents: item.interestCents,
+                closingBalanceCents: item.closingBalanceCents,
+              ),
+            );
+      }
+    });
+  }
+
+  Future<int> _sumLedger(
+    String loanId,
+    ledger.LedgerEntryType type,
+    int periodNumber,
+  ) async {
+    final rows =
+        await (_db.select(_db.ledgerEntries)..where(
+              (t) =>
+                  t.loanId.equals(loanId) &
+                  t.type.equals(type.name) &
+                  t.relatedPeriodNumber.equals(periodNumber),
+            ))
+            .get();
+    return rows.fold<int>(0, (sum, r) => sum + r.amountCents);
+  }
+
+  LedgerEntriesCompanion _ledgerCompanion(
+    String loanId,
+    ledger.LedgerEntryType type,
+    int amountCents,
+    DateTime postedAt,
+    int periodNumber,
+  ) => LedgerEntriesCompanion.insert(
+    id: newId(),
+    loanId: loanId,
+    type: type.name,
+    amountCents: amountCents,
+    postedAt: postedAt,
+    relatedPeriodNumber: Value(periodNumber),
+  );
+
+  Future<void> _insertAuditLog(
+    String action,
+    String entityType,
+    String entityId,
+    String? detail,
+  ) {
+    return _db
+        .into(_db.auditLogs)
+        .insert(
+          AuditLogsCompanion.insert(
+            id: newId(),
+            action: action,
+            entityType: entityType,
+            entityId: entityId,
+            detail: Value(detail),
+            createdAt: DateTime.now(),
+          ),
+        );
+  }
+}

@@ -1,0 +1,16 @@
+name: lending_engine
+description: Small Lending OS domain engine - interest, amortization schedules, state machines, waterfall.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  decimal: ^3.0.2
+  meta: ^1.15.0
+  rational: ^2.2.3
+
+dev_dependencies:
+  lints: ^4.0.0
+  test: ^1.25.0

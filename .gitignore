@@ -1,0 +1,19 @@
+# Dart / Flutter
+.dart_tool/
+.packages
+build/
+*.lock.info
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Drift generated code — regenerate with:
+#   dart run build_runner build --delete-conflicting-outputs
+apps/mobile/lib/**/*.g.dart
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# macOS
+.DS_Store
