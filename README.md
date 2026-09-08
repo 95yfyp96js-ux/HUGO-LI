@@ -13,6 +13,8 @@ packages/ledger/           Append-only 分錄、重放、看板聚合（純 Dart
 packages/license/          試用次數、裝置綁定、離線授權碼驗證（純 Dart）
 docs/interest-rules.md     計息與還款計畫規則（測試鎖定的規格來源）
 docs/state-machines.md     貸款狀態機、期別狀態機、授權狀態機
+docs/RUNNING.md            本機安裝與 flutter run 步驟、已知建置風險
+docs/MANUAL-QA.md          10 步手動驗收腳本（含預期數字）與「還不能封測」清單
 docs/ASSUMPTIONS.md        規格未明確指定之處的假設，以及本次開發環境限制
 ```
 
@@ -21,11 +23,11 @@ docs/ASSUMPTIONS.md        規格未明確指定之處的假設，以及本次�
 
 ## 環境需求
 
-- Flutter 3.x（含對應 Dart SDK）
-- Android Studio（含 Android SDK）或 Xcode（iOS 模擬器），視你要跑哪個平台
-- 詳見 `docs/ASSUMPTIONS.md`：本次開發沙盒環境沒有模擬器，已改用
-  headless widget test 驗證四步上手流程可跑通；第三方在有 Android
-  Studio / Xcode 的一般開發機上，依下方指令即可在模擬器或實機執行。
+- Flutter 3.27 以上（開發時用 3.47.2 / Dart 3.13）
+- Android Studio（含 Android SDK）或 Xcode，視你要跑哪個平台
+- **完整安裝步驟、已知建置風險與常見卡關見 [`docs/RUNNING.md`](docs/RUNNING.md)**
+- 詳見 `docs/ASSUMPTIONS.md`：本次開發環境沒有模擬器，已改用 headless
+  widget test 驗證流程；真機執行與建置尚未被驗證過。
 
 ## 快速開始
 
@@ -67,8 +69,9 @@ flutter run --dart-define=DEV_LICENSE=1
 計息公式、四種還款方式、利率換算、入帳瀑布順序、日結、提前還本規則，全部
 寫在 [`docs/interest-rules.md`](docs/interest-rules.md)，並由
 `packages/lending_engine/test/` 的固定數字案例與跨參數不變式測試鎖定
-（875 個測試，涵蓋 EMI/EPP/IO/BULLET 四種方式 × 多組本金/利率/期數組合，
-驗證「本金加總＝貸款本金」「末期餘額＝0」兩項不變式）。
+（880 個測試，涵蓋 EMI/EPP/IO/BULLET 四種方式 × 多組本金/利率/期數組合，
+驗證「本金加總＝貸款本金」「末期餘額＝0」兩項不變式；另有
+`golden_lifecycle_test.dart` 鎖定「整份計畫表逐期依瀑布沖銷到結清」的黃金案例）。
 
 貸款狀態機、期別狀態機、授權狀態機見
 [`docs/state-machines.md`](docs/state-machines.md)。
@@ -89,6 +92,14 @@ flutter run --dart-define=DEV_LICENSE=1
   SHA-256 雜湊供查重（不明文比對），畫面一律遮罩顯示末 4 碼。
 - 設定頁「匯出備份」可把目前資料庫複製一份到本機 `backups/` 子目錄。
 
+## 手動驗收
+
+自動化測試證明不了觸控、鍵盤遮擋、字級、真機效能與「重啟後資料還在」。
+拿到裝置後請照 [`docs/MANUAL-QA.md`](docs/MANUAL-QA.md) 走 10 步，
+每一步的預期數字都由 `apps/mobile/test/manual_qa_script_test.dart` 鎖住
+（文件與程式對不上時測試會先失敗）。該文件末尾的「還不能封測」清單是目前
+已知、擋著封測的問題。
+
 ## 完成定義檢查
 
 - [x] `packages/lending_engine` / `ledger` / `license` 測試全過（`dart test`）
@@ -98,9 +109,10 @@ flutter run --dart-define=DEV_LICENSE=1
 - [x] 部分還本後最終全額清償，期末餘額為 0
       （`apps/mobile/test/loan_repository_test.dart`）
 - [x] 身分證字號畫面遮罩、DB 只存密文＋雜湊
-- [ ] 第三人在有 Android Studio / Xcode 的機器上，依本 README 指令
-      `flutter run` 實際跑起來（本沙盒環境無模擬器，未能親自驗證，見
-      `docs/ASSUMPTIONS.md`）
+- [ ] 第三人在有 Android Studio / Xcode 的機器上依 `docs/RUNNING.md`
+      實際 `flutter run` 起來（本環境無模擬器，未能親自驗證）
+- [ ] 有人照 `docs/MANUAL-QA.md` 在真機上走完 10 步
+- [ ] 「還不能封測」清單清空（見 `docs/MANUAL-QA.md` 文末）
 
 ## 禁止事項（本系統刻意不做）
 

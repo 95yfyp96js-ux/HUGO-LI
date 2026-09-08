@@ -6,18 +6,21 @@ import '../domain/loan_repository.dart';
 /// 範例資料（僅供操作示範／測試，非真實貸款）。建立 2 位借款人與 2 筆已撥款
 /// 貸款（分別示範 EMI、EPP 兩種還款方式），方便第一次安裝後快速看到看板
 /// 有數字、走過完整流程。僅在設定頁「載入範例資料」（debug 模式）觸發。
+///
+/// 身分證欄位刻意用 Z9 開頭的假號碼，避免與手動驗收（docs/MANUAL-QA.md）或
+/// 真實使用者輸入的號碼撞號——撞號會讓查重擋下、整個載入中途失敗。
 Future<void> seedDemoData({
   required BorrowerRepository borrowers,
   required LoanRepository loans,
 }) async {
   final borrowerA = await borrowers.create(
     name: '陳大文',
-    idNumber: 'A123456789',
+    idNumber: 'Z900000001',
     phone: '0912-345-678',
   );
   final borrowerB = await borrowers.create(
     name: '林小美',
-    idNumber: 'B223456789',
+    idNumber: 'Z900000002',
     phone: '0987-654-321',
   );
 
