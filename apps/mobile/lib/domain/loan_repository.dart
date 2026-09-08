@@ -111,7 +111,11 @@ class LoanRepository {
 
   /// 確認撥款（四步上手第 4 步）。撥款後才寫入 `DISBURSEMENT` 分錄、開始計息、
   /// 鎖定 Schedule 的錨定日期。
-  Future<void> confirmDisbursement(String loanId) async {
+  ///
+  /// [at] 為實際撥款日，預設為現在。補登歷史撥款（先撥款、事後才登記進系統）
+  /// 時傳入當時的日期，計畫表與計息起算日都會以它為錨點；不接受未來日期
+  /// （撥款是既成事實，不能預約）。
+  Future<void> confirmDisbursement(String loanId, {DateTime? at}) async {
     final Loan? loan = await findById(loanId);
     if (loan == null) throw StateError('找不到貸款 $loanId');
     final currentStatus = parseLoanStatus(loan.status);
@@ -121,7 +125,10 @@ class LoanRepository {
       );
     }
 
-    final DateTime now = DateTime.now();
+    final DateTime now = at ?? DateTime.now();
+    if (now.isAfter(DateTime.now())) {
+      throw ArgumentError('撥款日不可為未來日期：$now');
+    }
 
     await _db.transaction(() async {
       await _generateAndPersistSchedule(loanId, anchorDate: now);

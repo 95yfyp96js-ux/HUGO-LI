@@ -1,7 +1,6 @@
 // packages/lending_engine 之外，這裡驗證 Drift repository 層本身：部分還本、
 // 全額清償後期末餘額為 0、狀態機正確推進到 SETTLED（見 spec 完成定義）。
 // 純 Dart 測試（不需要 widget tree），用 in-memory Drift 資料庫。
-import 'package:drift/drift.dart' hide isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lending_engine/lending_engine.dart' as engine;
@@ -170,26 +169,91 @@ void main() {
         tenorPeriods: 3,
         plannedDisbursementDate: DateTime.now(),
       );
-      await loanRepo.confirmDisbursement(loan.id);
 
-      // 直接把第 1 期到期日改到 40 天前，模擬「早已過寬限期（預設 3 天）未繳」，
-      // 測試日結的逾期判定與狀態轉移，不依賴等待真實時間流逝。
-      final firstItem = (await loanRepo.scheduleFor(loan.id)).first;
-      await (db.update(
-        db.scheduleItems,
-      )..where((t) => t.id.equals(firstItem.id))).write(
-        ScheduleItemsCompanion(
-          dueDate: Value(DateTime.now().subtract(const Duration(days: 40))),
-        ),
-      );
+      // 補登 70 天前的歷史撥款：計畫表以該日為錨點，第 1、2 期（到期日
+      // 40 天前、10 天前）都已過寬限期未繳。
+      final backdated = DateTime.now().subtract(const Duration(days: 70));
+      await loanRepo.confirmDisbursement(loan.id, at: backdated);
 
       await loanRepo.runDailyBatch(loanId: loan.id);
 
       final schedule = await loanRepo.scheduleFor(loan.id);
-      expect(schedule.first.status, 'overdue');
+      expect(schedule[0].status, 'overdue');
+      expect(schedule[1].status, 'overdue');
+      expect(schedule[2].status, 'due'); // 到期日在 20 天後，尚未到期
 
       final updated = await loanRepo.findById(loan.id);
       expect(updated!.status, 'delinquent');
+      expect(
+        updated.disbursedAt!.difference(backdated).inSeconds.abs(),
+        lessThan(2),
+      );
+
+      await db.close();
+    });
+
+    test('補登歷史撥款：撥款分錄與計息起算日都以實際撥款日為準', () async {
+      final db = await _openTestDatabase();
+      final loanRepo = LoanRepository(db);
+      final borrowerId = await _seedBorrower(db);
+
+      final loan = await loanRepo.registerLoan(
+        borrowerId: borrowerId,
+        principalCents: 600000,
+        method: engine.RepaymentMethod.emi,
+        rateType: engine.RateType.monthly,
+        rateBps: 100,
+        dayCount: engine.DayCount.thirty360,
+        tenorPeriods: 6,
+        plannedDisbursementDate: DateTime.now(),
+      );
+      final backdated = DateTime.now().subtract(const Duration(days: 45));
+      await loanRepo.confirmDisbursement(loan.id, at: backdated);
+
+      final entries = await loanRepo.ledgerFor(loan.id);
+      expect(
+        entries.single.postedAt.difference(backdated).inSeconds.abs(),
+        lessThan(2),
+      );
+
+      final schedule = await loanRepo.scheduleFor(loan.id);
+      expect(
+        schedule.first.dueDate
+            .difference(backdated.add(const Duration(days: 30)))
+            .inSeconds
+            .abs(),
+        lessThan(2),
+      );
+
+      await db.close();
+    });
+
+    test('撥款日不可為未來日期', () async {
+      final db = await _openTestDatabase();
+      final loanRepo = LoanRepository(db);
+      final borrowerId = await _seedBorrower(db);
+
+      final loan = await loanRepo.registerLoan(
+        borrowerId: borrowerId,
+        principalCents: 100000,
+        method: engine.RepaymentMethod.io,
+        rateType: engine.RateType.monthly,
+        rateBps: 100,
+        dayCount: engine.DayCount.thirty360,
+        tenorPeriods: 3,
+        plannedDisbursementDate: DateTime.now(),
+      );
+
+      expect(
+        () => loanRepo.confirmDisbursement(
+          loan.id,
+          at: DateTime.now().add(const Duration(days: 1)),
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+      // 失敗後狀態不變、仍未寫入任何分錄。
+      expect((await loanRepo.findById(loan.id))!.status, 'accepted');
+      expect(await loanRepo.ledgerFor(loan.id), isEmpty);
 
       await db.close();
     });

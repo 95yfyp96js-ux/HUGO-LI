@@ -21,6 +21,10 @@ Future<void> seedDemoData({
     phone: '0987-654-321',
   );
 
+  final DateTime now = DateTime.now();
+
+  // 貸款 A：35 天前撥款，第 1 期（到期日＝5 天前）已正常繳清 → 進行中。
+  final DateTime disbursedA = now.subtract(const Duration(days: 35));
   final loanA = await loans.registerLoan(
     borrowerId: borrowerA.id,
     principalCents: 20000000, // 20 萬元
@@ -29,19 +33,22 @@ Future<void> seedDemoData({
     rateBps: 120, // 1.2%
     dayCount: engine.DayCount.thirty360,
     tenorPeriods: 12,
-    plannedDisbursementDate: DateTime.now().subtract(const Duration(days: 35)),
+    plannedDisbursementDate: disbursedA,
   );
-  await loans.confirmDisbursement(loanA.id);
+  await loans.confirmDisbursement(loanA.id, at: disbursedA);
   final scheduleA = await loans.scheduleFor(loanA.id);
   final firstDue =
       scheduleA.first.principalCents + scheduleA.first.interestCents;
   await loans.recordPayment(
     loanId: loanA.id,
     amountCents: firstDue,
-    paidAt: DateTime.now().subtract(const Duration(days: 5)),
+    paidAt: now.subtract(const Duration(days: 3)),
     note: '範例：第 1 期正常繳款',
   );
 
+  // 貸款 B：70 天前撥款，刻意不繳款 → 第 1、2 期逾期，示範逾期情境
+  // （App 啟動時的日結會自動標記，看板「逾期」欄位才會有數字）。
+  final DateTime disbursedB = now.subtract(const Duration(days: 70));
   final loanB = await loans.registerLoan(
     borrowerId: borrowerB.id,
     principalCents: 10000000, // 10 萬元
@@ -50,8 +57,8 @@ Future<void> seedDemoData({
     rateBps: 1500, // 15%
     dayCount: engine.DayCount.thirty360,
     tenorPeriods: 6,
-    plannedDisbursementDate: DateTime.now().subtract(const Duration(days: 70)),
+    plannedDisbursementDate: disbursedB,
   );
-  await loans.confirmDisbursement(loanB.id);
-  // 刻意不繳款，示範逾期情境（App 啟動時的日結會自動標記逾期）。
+  await loans.confirmDisbursement(loanB.id, at: disbursedB);
+  await loans.runDailyBatch(loanId: loanB.id);
 }
