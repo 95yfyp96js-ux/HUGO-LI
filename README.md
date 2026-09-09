@@ -7,7 +7,8 @@ SQLCipher 加密儲存、不上傳伺服器。系統**永不自動核准貸款**
 ## 專案結構
 
 ```
-apps/mobile/               Flutter App（UI、Drift/SQLCipher、riverpod、go_router）
+apps/web/                  網頁版第 1 版：收款並核銷 ＋ 活盤五格（Dart 後端算金額，前端不算）
+apps/mobile/               Flutter App（本機個人版，已凍結封存為「借款計息公式庫」的使用範例）
 packages/lending_engine/   計息、攤還計畫、狀態機、瀑布、日結（純 Dart，UI 不得內嵌公式）
 packages/ledger/           Append-only 分錄、重放、看板聚合（純 Dart）
 packages/license/          試用次數、裝置綁定、離線授權碼驗證（純 Dart）
@@ -16,6 +17,9 @@ docs/state-machines.md     貸款狀態機、期別狀態機、授權狀態機
 docs/RUNNING.md            本機安裝與 flutter run 步驟、已知建置風險
 docs/MANUAL-QA.md          16 步手動驗收腳本（含預期數字）與「還不能封測」清單
 docs/ASSUMPTIONS.md        規格未明確指定之處的假設，以及本次開發環境限制
+docs/BOSS-SPEC.md          網頁版第 1 版行為契約（角色、8 個按鈕、核銷對帳鍵、活盤五格、日結四關）
+docs/THREAT-REVIEW.md      信任邊界與 12 條攻擊的防法／暴露
+docs/DATA-MIN.md           欄位級資料最小化與匯出白名單
 ```
 
 三個 `packages/*` 皆為平台無關的純 Dart 套件（不依賴 Flutter），`apps/mobile`

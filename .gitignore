@@ -17,3 +17,7 @@ apps/mobile/lib/**/*.g.dart
 
 # macOS
 .DS_Store
+
+# 網頁版本機資料庫
+apps/web/*.db
+apps/web/.dart_tool/
