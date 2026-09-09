@@ -20,6 +20,8 @@ docs/ASSUMPTIONS.md        規格未明確指定之處的假設，以及本次�
 docs/BOSS-SPEC.md          網頁版第 1 版行為契約（角色、8 個按鈕、核銷對帳鍵、活盤五格、日結四關）
 docs/THREAT-REVIEW.md      信任邊界與 12 條攻擊的防法／暴露
 docs/DATA-MIN.md           欄位級資料最小化與匯出白名單
+docs/WEB-RUN.md            網頁版怎麼打開（給不寫程式的人，逐步指令）
+docs/WEB-QA.md             網頁版 5 步驗收（預期數字都是跑出來的）
 ```
 
 三個 `packages/*` 皆為平台無關的純 Dart 套件（不依賴 Flutter），`apps/mobile`

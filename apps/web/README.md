@@ -13,6 +13,13 @@
 認證後那一天（含之前）**鎖帳**：收款、收票、兌現、退票、補登撥付一律被後端擋掉，
 不是把按鈕藏起來。要更正只能開更正單（本版尚未提供）。
 
+## 不寫程式的人看這兩份
+
+- **[`docs/WEB-RUN.md`](../../docs/WEB-RUN.md)** — 從 clone 到瀏覽器看到登入頁，
+  逐步複製指令；含「員工手機怎麼開」與對外網址的限制。
+- **[`docs/WEB-QA.md`](../../docs/WEB-QA.md)** — 5 步驗收（建客戶 → 撥付 → 收款
+  → 五格會變 → 日結能鎖），每步的預期數字都是跑出來的。
+
 ## 跑起來
 
 ```bash
@@ -28,7 +35,14 @@ dart run bin/server.dart        # http://localhost:8080
 BOSS_PASSWORD=... STAFF_PASSWORD=... dart run bin/server.dart
 ```
 
-其他環境變數：`PORT`（預設 8080）、`DB_PATH`（預設 `ledger.db`）。
+其他環境變數：`PORT`（預設 8080）、`DB_PATH`（預設 `ledger.db`）、
+`SECURE_COOKIES=1`（對外開放時用，session cookie 加 `Secure`；本機 http 會登不進去）。
+
+要讓員工在外面也連得到：
+
+```bash
+./bin/serve-public.sh      # 需先裝 cloudflared，細節與限制見 docs/WEB-RUN.md
+```
 
 ```bash
 dart analyze   # 預期 No issues found!

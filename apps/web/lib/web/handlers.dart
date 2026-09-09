@@ -24,7 +24,7 @@ import 'views.dart';
 /// * **老闆專屬的動作在後端再檢查一次角色**；前端不畫按鈕不算權限。
 /// * **`op_id` 在 GET 組表單時就發**，跟著表單走完；同一個 op_id 只成立一次。
 class AppHandlers {
-  AppHandlers(this.db)
+  AppHandlers(this.db, {this.secureCookies = false})
     : _store = Store(db),
       _auth = AuthService(db),
       _loans = LoanService(db),
@@ -34,6 +34,12 @@ class AppHandlers {
       _close = DailyCloseService(db);
 
   final Database db;
+
+  /// 對外開放（例如透過 cloudflared 這類 HTTPS 通道）時要設 true，
+  /// session cookie 才會加上 `Secure`，不會在明文連線上被送出去。
+  /// 本機 http://localhost 用不到，設了反而登不進去。
+  final bool secureCookies;
+
   final Store _store;
   final AuthService _auth;
   final LoanService _loans;

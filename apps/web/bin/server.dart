@@ -18,7 +18,9 @@ Future<void> main(List<String> args) async {
   final int port = int.tryParse(Platform.environment['PORT'] ?? '') ?? 8080;
   final db = openDatabase(path: path);
   bootstrapUsers(db);
-  final handlers = AppHandlers(db);
+  // 對外開放時把 cookie 標成 Secure（見 docs/WEB-RUN.md）。
+  final bool secure = Platform.environment['SECURE_COOKIES'] == '1';
+  final handlers = AppHandlers(db, secureCookies: secure);
   final server = await shelf_io.serve(handlers.handler, '0.0.0.0', port);
   stdout.writeln('小額借款＋支票貼現：http://localhost:${server.port}/  （DB: $path）');
 }
