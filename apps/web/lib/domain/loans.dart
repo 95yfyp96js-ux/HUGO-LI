@@ -5,20 +5,34 @@ import 'package:sqlite3/sqlite3.dart';
 
 import '../db/schema.dart';
 import '../money.dart';
+import 'lock.dart';
 import 'settlement.dart' show newId, SettlementRejected;
 
 /// 建客戶、建借款、確認撥付。**本輪沒有畫面**（那是按鈕 1～3，不在這一輪
 /// 範圍），這裡只提供函式，讓收款核銷畫面與活盤有真實資料可用。
 class LoanService {
-  LoanService(this.db);
+  LoanService(this.db) : _lock = LockGuard(db);
 
   final Database db;
+  final LockGuard _lock;
 
   String createCustomer({
     required String name,
     required String idNumber,
     String? phone,
   }) {
+    final String hash = _hash(idNumber);
+    final dup = db.select(
+      'SELECT name, id_number_last4 FROM customers WHERE id_number_hash = ?',
+      [hash],
+    );
+    if (dup.isNotEmpty) {
+      throw SettlementRejected(
+        '這個證號已經有客戶了：${dup.first['name']}'
+        '（末四碼 ****${dup.first['id_number_last4']}）。'
+        '要用同一位客戶請直接選他。',
+      );
+    }
     final String id = newId();
     // 只存末四碼與雜湊，完整證號不進這個第 1 版（docs/DATA-MIN.md）。
     db.execute(
@@ -30,7 +44,7 @@ class LoanService {
         idNumber.length <= 4
             ? idNumber
             : idNumber.substring(idNumber.length - 4),
-        _hash(idNumber),
+        hash,
         phone,
       ],
     );
@@ -86,6 +100,7 @@ class LoanService {
     if (dateOnly(disbursedAt).isAfter(today)) {
       throw SettlementRejected('撥付日不可以是未來日期。');
     }
+    _lock.assertOpen(disbursedAt);
     db.execute('BEGIN IMMEDIATE');
     try {
       db.execute(

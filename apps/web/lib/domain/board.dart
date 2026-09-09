@@ -9,6 +9,9 @@ import '../money.dart';
 
 /// 活盤五格（docs/BOSS-SPEC.md D）。
 ///
+/// 重放一律帶「到某一天為止」的界限（`entry_date <= asOf`），所以同一支程式
+/// 既能算今天的活盤，也能算日結要用的期初／期末。
+///
 /// 每一格算**兩次**：
 /// * 現況（state）— 讀 `loans` / `schedule_items` / `checks` / `operations`。
 /// * 重放（replay）— 只讀 `entries`，從第一筆事件疊到今天；計畫表結構由
@@ -111,6 +114,9 @@ class BoardService {
 
   final Database db;
   final Store _store;
+
+  /// 只由分錄重放出某一天收盤的五格（日結的期初／期末用這條路）。
+  FiveBoxes replayAsOf(DateTime date) => _fromReplay(dateOnly(date));
 
   BoardSnapshot compute({DateTime? asOf}) {
     final DateTime today = dateOnly(asOf ?? DateTime.now());
@@ -220,10 +226,13 @@ class BoardService {
       final result = engine.generateSchedule(loan.terms());
       final paidBySeq = <int, int>{}; // seq -> 已沖的本息費（不含罰息）
       int paidPrincipal = 0;
-      for (final row in _store.entriesForLoan(loan.id)) {
+      int disbursed = 0;
+      for (final row in _store.entriesForLoan(loan.id, upTo: today)) {
         final int amount = row['amount_cents'] as int;
         final int? seq = row['schedule_seq'] as int?;
         switch (row['type'] as String) {
+          case EntryType.loanDisburse:
+            disbursed += amount;
           case EntryType.collectPrincipal:
             paidPrincipal += amount;
             if (seq != null) paidBySeq[seq] = (paidBySeq[seq] ?? 0) + amount;
@@ -232,7 +241,10 @@ class BoardService {
             if (seq != null) paidBySeq[seq] = (paidBySeq[seq] ?? 0) + amount;
         }
       }
-      final int remaining = loan.principalCents - paidPrincipal;
+      // 這一天還沒撥出去的借款，當天的帳上就不該有它——連期別都不算。
+      // （日結的期初＝昨天收盤，今天才撥的款不能出現在期初。）
+      if (disbursed == 0) continue;
+      final int remaining = disbursed - paidPrincipal;
       outstandingPrincipal += remaining > 0 ? remaining : 0;
 
       for (final item in result.items) {
@@ -253,7 +265,9 @@ class BoardService {
     // 2. 票據：把 CHECK_* 分錄疊成每張票的狀態。
     final replayed = <String, _ReplayCheck>{};
     for (final row in db.select(
-      "SELECT * FROM entries WHERE check_id IS NOT NULL ORDER BY posted_at, id",
+      'SELECT * FROM entries WHERE check_id IS NOT NULL AND entry_date <= ? '
+      'ORDER BY entry_date, posted_at, id',
+      [formatDate(today)],
     )) {
       final String id = row['check_id'] as String;
       final int amount = row['amount_cents'] as int;

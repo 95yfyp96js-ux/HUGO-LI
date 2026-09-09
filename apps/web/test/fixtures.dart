@@ -1,6 +1,7 @@
 import 'package:lending_engine/lending_engine.dart' as engine;
 import 'package:sqlite3/sqlite3.dart';
 import 'package:web_ledger/db/schema.dart';
+import 'package:web_ledger/domain/auth.dart';
 import 'package:web_ledger/domain/checks.dart';
 import 'package:web_ledger/domain/loans.dart';
 import 'package:web_ledger/domain/settlement.dart';
@@ -12,7 +13,8 @@ class Fx {
   Fx(this.db)
     : loans = LoanService(db),
       checks = CheckService(db),
-      settlement = SettlementService(db);
+      settlement = SettlementService(db),
+      auth = AuthService(db);
 
   factory Fx.open() => Fx(openDatabase());
 
@@ -20,14 +22,44 @@ class Fx {
   final LoanService loans;
   final CheckService checks;
   final SettlementService settlement;
+  final AuthService auth;
+
+  late String bossToken;
+  late String staffToken;
+  late String bossId;
+  late String staffId;
+
+  /// 建一位老闆與一位員工並登入，回傳兩張 session cookie。
+  void seedUsers() {
+    bossId = auth.createUser(
+      username: 'boss',
+      displayName: '老闆',
+      role: Role.boss,
+      password: 'boss-password',
+    );
+    staffId = auth.createUser(
+      username: 'staff',
+      displayName: '阿明',
+      role: Role.staff,
+      password: 'staff-password',
+    );
+    bossToken = auth.login('boss', 'boss-password');
+    staffToken = auth.login('staff', 'staff-password');
+  }
 
   late String customerId;
   late String loanId;
 
   static final DateTime today = DateTime(2026, 5, 1);
 
-  /// 撥款日 = today − [daysAgo]。daysAgo = 0 表示今天剛撥。
-  String seedLoan({int daysAgo = 0, bool penalty = false}) {
+  /// 撥款日 = [anchor]（預設固定的 [today]）− [daysAgo]。
+  /// 日結測試要用真正的今天，就傳 `anchor: DateTime.now()`。
+  String seedLoan({
+    int daysAgo = 0,
+    bool penalty = false,
+    DateTime? anchor,
+  }) {
+    final DateTime base = anchor ?? today;
     customerId = loans.createCustomer(name: '王小明', idNumber: 'A123456789');
     loanId = loans.registerLoan(
       customerId: customerId,
@@ -43,11 +75,32 @@ class Fx {
       opId: newId(),
       operatorId: 'staff-1',
       loanId: loanId,
-      disbursedAt: today.subtract(Duration(days: daysAgo)),
-      now: today,
+      disbursedAt: base.subtract(Duration(days: daysAgo)),
+      now: base,
     );
     return loanId;
   }
+
+  /// 用指定日期收一張票（日結測試要用「今天」）。
+  String seedCheckOn(
+    DateTime on, {
+    required int faceCents,
+    required int dueInDays,
+    int discountCents = 0,
+    String checkNo = 'AB77770001',
+  }) => checks.receive(
+    opId: newId(),
+    operatorId: 'staff-1',
+    customerId: customerId,
+    bankCode: '004',
+    checkNo: checkNo,
+    faceCents: faceCents,
+    discountInterestCents: discountCents,
+    cashPaidCents: faceCents - discountCents,
+    otherFeeCents: 0,
+    dueDate: on.add(Duration(days: dueInDays)),
+    receivedDate: on,
+  );
 
   String seedCheck({
     required int faceCents,

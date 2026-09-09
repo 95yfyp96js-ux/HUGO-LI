@@ -90,6 +90,37 @@ CREATE TABLE IF NOT EXISTS entries (
   operator_id       TEXT NOT NULL,
   note              TEXT
 )''',
+  '''
+CREATE TABLE IF NOT EXISTS users (
+  id            TEXT PRIMARY KEY,
+  username      TEXT NOT NULL UNIQUE,
+  display_name  TEXT NOT NULL,
+  role          TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  salt          TEXT NOT NULL,
+  disabled_at   TEXT
+)''',
+  '''
+CREATE TABLE IF NOT EXISTS sessions (
+  token      TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL
+)''',
+  '''
+CREATE TABLE IF NOT EXISTS daily_closes (
+  business_date     TEXT PRIMARY KEY,
+  opening_json      TEXT NOT NULL,
+  movements_json    TEXT NOT NULL,
+  closing_json      TEXT NOT NULL,
+  imbalances_json   TEXT NOT NULL,
+  unreconciled_json TEXT NOT NULL,
+  reviewed_at       TEXT,
+  reviewed_by       TEXT,
+  confirmed_at      TEXT,
+  confirmed_by      TEXT,
+  certified_at      TEXT,
+  certified_by      TEXT
+)''',
   'CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(entry_date)',
   'CREATE INDEX IF NOT EXISTS idx_entries_loan ON entries(loan_id, schedule_seq)',
   'CREATE INDEX IF NOT EXISTS idx_entries_check ON entries(check_id)',
@@ -112,6 +143,11 @@ class EntryType {
   static const String checkCashFull = 'CHECK_CASH_FULL';
   static const String checkBounce = 'CHECK_BOUNCE';
   static const String checkRecover = 'CHECK_RECOVER';
+}
+
+class Role {
+  static const String staff = 'staff';
+  static const String boss = 'boss';
 }
 
 class CheckStatus {

@@ -1,92 +1,9 @@
 import '../domain/board.dart';
 import '../domain/settlement.dart';
 import '../money.dart';
+import 'chrome.dart';
 
-/// 伺服器端算好、格式化好，再送給瀏覽器。
-///
-/// **這一頁沒有任何 JavaScript 算術。** 頁面上每一個金額都是伺服器算完之後
-/// 的字串；瀏覽器只做顯示與表單送出。溢繳確認也是一次伺服器來回，不是前端
-/// 自己減一減就跳窗。
-String escapeHtml(String value) => value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;');
-
-String page({
-  required String left,
-  required String right,
-  required String operatorName,
-}) =>
-    '''<!doctype html>
-<html lang="zh-Hant">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>收款並核銷 · 活盤</title>
-<style>
-  :root {
-    --ink: #10233d; --ink-2: #4a5b74; --line: #d8e0ea; --bg: #f4f6f9;
-    --card: #ffffff; --brand: #123a6b; --ok: #0d7a4a; --bad: #b3261e;
-    --warn-bg: #fdecea; --warn-line: #f2b8b5;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink);
-    font: 16px/1.55 -apple-system, "Noto Sans TC", "PingFang TC", sans-serif;
-    -webkit-text-size-adjust: 100%; }
-  header { background: var(--brand); color: #fff; padding: 14px 18px;
-    display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-  header h1 { font-size: 17px; margin: 0; font-weight: 700; }
-  header .who { font-size: 13px; opacity: .85; }
-  .wrap { display: grid; gap: 16px; padding: 16px; max-width: 1240px; margin: 0 auto;
-    grid-template-columns: 1fr; }
-  @media (min-width: 1000px) { .wrap { grid-template-columns: 1fr 1fr; align-items: start; } }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-    padding: 16px; }
-  .card h2 { font-size: 15px; margin: 0 0 12px; letter-spacing: .02em; }
-  label { display: block; font-size: 13px; color: var(--ink-2); margin: 12px 0 4px; }
-  input[type=text], input[type=date], select {
-    width: 100%; padding: 11px 12px; font-size: 16px; border: 1px solid var(--line);
-    border-radius: 8px; background: #fff; color: var(--ink); }
-  button { font: inherit; font-weight: 600; padding: 12px 16px; border-radius: 8px;
-    border: 0; background: var(--brand); color: #fff; width: 100%; margin-top: 14px; }
-  button.ghost { background: #fff; color: var(--brand); border: 1px solid var(--brand); }
-  .periods { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  .periods label { display: flex; gap: 10px; align-items: flex-start; margin: 0;
-    padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 14px;
-    color: var(--ink); cursor: pointer; }
-  .periods label:last-child { border-bottom: 0; }
-  .periods input { margin-top: 3px; width: 18px; height: 18px; flex: 0 0 auto; }
-  .periods .amt { margin-left: auto; text-align: right; white-space: nowrap; }
-  .muted { color: var(--ink-2); font-size: 13px; }
-  .od { color: var(--bad); font-weight: 700; }
-  .boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
-  .box { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
-  .box .t { font-size: 12px; color: var(--ink-2); }
-  .box .v { font-size: 22px; font-weight: 700; margin-top: 4px; }
-  .box .sub { font-size: 12px; color: var(--ink-2); margin-top: 6px; }
-  .box .sub b { color: var(--bad); }
-  .banner { border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; font-size: 14px; }
-  .banner.bad { background: var(--warn-bg); border: 1px solid var(--warn-line); color: var(--bad); }
-  .banner.ok { background: #e7f4ec; border: 1px solid #b6ddc6; color: var(--ok); }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); }
-  td.num, th.num { text-align: right; white-space: nowrap; }
-  .redlist th { color: var(--bad); }
-  h3 { font-size: 13px; margin: 18px 0 8px; color: var(--ink-2); }
-</style>
-</head>
-<body>
-<header>
-  <h1>小額借款＋支票貼現</h1>
-  <span class="who">${escapeHtml(operatorName)}（員工）</span>
-</header>
-<div class="wrap">
-  <section class="card">$left</section>
-  <section class="card">$right</section>
-</div>
-</body>
-</html>''';
+/// 收款並核銷（左）與活盤（右）的畫面。版面與共用元件在 chrome.dart。
 
 // --------------------------------------------------------------------- 左
 

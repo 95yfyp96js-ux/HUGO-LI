@@ -4,15 +4,17 @@ import 'package:sqlite3/sqlite3.dart';
 
 import '../db/schema.dart';
 import '../money.dart';
+import 'lock.dart';
 import 'settlement.dart' show newId, SettlementRejected;
 
 /// 票據寫入。**本輪沒有畫面**（收票／兌現／退票的 UI 不在這一輪範圍），
 /// 這裡只提供函式，讓活盤格 2、格 3、格 5 與紅字清單有真實資料可以算、
 /// 也讓「部分兌現剩餘票面仍留在格 2」這條規則測得到。
 class CheckService {
-  CheckService(this.db);
+  CheckService(this.db) : _lock = LockGuard(db);
 
   final Database db;
+  final LockGuard _lock;
 
   /// 收票（貼現）。恆等式：`實付 = 票面 − 貼現息 − 其他費用`，不符不准存。
   String receive({
@@ -28,6 +30,7 @@ class CheckService {
     required DateTime dueDate,
     required DateTime receivedDate,
   }) {
+    _lock.assertOpen(receivedDate);
     final int expected = faceCents - discountInterestCents - otherFeeCents;
     if (cashPaidCents != expected) {
       throw SettlementRejected(
@@ -101,6 +104,7 @@ class CheckService {
     required DateTime cashedAt,
     String? diffReason,
   }) {
+    _lock.assertOpen(cashedAt);
     final rows = db.select('SELECT * FROM checks WHERE id = ?', [checkId]);
     if (rows.isEmpty) throw SettlementRejected('請先選到要兌現的票。');
     final row = rows.first;
@@ -170,6 +174,7 @@ class CheckService {
     required DateTime bouncedAt,
     String? reason,
   }) {
+    _lock.assertOpen(bouncedAt);
     final rows = db.select('SELECT * FROM checks WHERE id = ?', [checkId]);
     if (rows.isEmpty) throw SettlementRejected('請先選到要退票的票。');
     final row = rows.first;

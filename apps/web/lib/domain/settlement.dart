@@ -7,6 +7,7 @@ import 'package:sqlite3/sqlite3.dart';
 import '../db/schema.dart';
 import '../db/store.dart';
 import '../money.dart';
+import 'lock.dart';
 import 'model.dart';
 
 /// 收款並核銷（docs/BOSS-SPEC.md B-5、C-0～C-2）。
@@ -145,10 +146,13 @@ class SettlementRejected implements Exception {
 }
 
 class SettlementService {
-  SettlementService(this.db) : _store = Store(db);
+  SettlementService(this.db)
+    : _store = Store(db),
+      _lock = LockGuard(db);
 
   final Database db;
   final Store _store;
+  final LockGuard _lock;
 
   // ------------------------------------------------------------ 罰息
 
@@ -185,6 +189,10 @@ class SettlementService {
     if (loan == null || !loan.isDisbursed) {
       throw SettlementRejected('找不到這筆已撥付的借款。');
     }
+    if (dateOnly(paidAt).isAfter(dateOnly(DateTime.now()))) {
+      throw SettlementRejected('收款日不可以是未來日期。');
+    }
+    _lock.assertOpen(paidAt);
     final schedule = _store.scheduleFor(loan);
     final unsettled = schedule.where((p) => !p.isSettled).toList();
 
@@ -284,7 +292,8 @@ class SettlementService {
     int overpayment = 0;
     if (remaining > 0) {
       if (unselected.isNotEmpty) {
-        // 規格缺口 G2（docs/BOSS-SPEC.md D-3）：勾錯範圍，不是溢繳，不給 ack 放行。
+        // G2 定案（docs/BOSS-SPEC.md C-2b）：勾錯範圍，不是溢繳。擋下叫他補勾，
+        // 不給 overpay_ack 放行——系統不替員工決定這筆錢要沖到哪幾期。
         blocked =
             '這筆錢超過你勾選的期別應繳 ${formatMoney(selectedDue)}，'
             '多出 ${formatMoney(remaining)}。'

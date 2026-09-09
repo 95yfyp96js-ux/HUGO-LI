@@ -22,6 +22,17 @@ class Store {
     return rows.isEmpty ? '（查無客戶）' : rows.first['name'] as String;
   }
 
+  List<({String id, String name, String last4})> customers() => db
+      .select('SELECT id, name, id_number_last4 FROM customers ORDER BY name')
+      .map(
+        (r) => (
+          id: r['id'] as String,
+          name: r['name'] as String,
+          last4: r['id_number_last4'] as String,
+        ),
+      )
+      .toList();
+
   // ------------------------------------------------------------------ 貸款
 
   Loan? loanById(String id) {
@@ -36,6 +47,12 @@ class Store {
     );
     return rows.map(_mapLoan).toList();
   }
+
+  /// 建約了但還沒撥付的借款（「確認撥付」用）。
+  List<Loan> undisbursedLoans() => db
+      .select('SELECT * FROM loans WHERE disbursed_at IS NULL ORDER BY id')
+      .map(_mapLoan)
+      .toList();
 
   Loan _mapLoan(Row r) => Loan(
     id: r['id'] as String,
@@ -107,12 +124,75 @@ class Store {
     status: r['status'] as String,
   );
 
+  /// 仍是「持有」的票（兌現／退票的下拉用）。
+  List<CheckState> heldChecks() => db
+      .select(
+        'SELECT * FROM checks WHERE status = ? ORDER BY due_date',
+        [CheckStatus.held],
+      )
+      .map(_mapCheck)
+      .toList();
+
+  String customerIdForCheck(String checkId) => db
+      .select('SELECT customer_id FROM checks WHERE id = ?', [checkId])
+      .first['customer_id'] as String;
+
   // ---------------------------------------------------------------- 分錄
 
-  List<Row> entriesForLoan(String loanId) => db.select(
-    'SELECT * FROM entries WHERE loan_id = ? ORDER BY posted_at, id',
-    [loanId],
-  );
+  List<Row> entriesForLoan(String loanId, {DateTime? upTo}) {
+    if (upTo == null) {
+      return db.select(
+        'SELECT * FROM entries WHERE loan_id = ? ORDER BY entry_date, posted_at, id',
+        [loanId],
+      );
+    }
+    return db.select(
+      'SELECT * FROM entries WHERE loan_id = ? AND entry_date <= ? '
+      'ORDER BY entry_date, posted_at, id',
+      [loanId, formatDate(upTo)],
+    );
+  }
+
+  /// 某一天的流水。[operatorId] 有值時只回那個人自己登的
+  /// （員工只看得到自己的，見 docs/BOSS-SPEC.md A）。
+  List<Row> entriesForDate(DateTime date, {String? operatorId}) {
+    final String d = formatDate(dateOnly(date));
+    if (operatorId == null) {
+      return db.select(
+        'SELECT * FROM entries WHERE entry_date = ? ORDER BY posted_at, id',
+        [d],
+      );
+    }
+    return db.select(
+      'SELECT * FROM entries WHERE entry_date = ? AND operator_id = ? '
+      'ORDER BY posted_at, id',
+      [d, operatorId],
+    );
+  }
+
+  String? loanCustomerName(String? loanId) {
+    if (loanId == null) return null;
+    final rows = db.select(
+      'SELECT c.name FROM loans l JOIN customers c ON c.id = l.customer_id '
+      'WHERE l.id = ?',
+      [loanId],
+    );
+    return rows.isEmpty ? null : rows.first['name'] as String;
+  }
+
+  ({String bank, String masked})? checkLabel(String? checkId) {
+    if (checkId == null) return null;
+    final rows = db.select(
+      'SELECT bank_code, check_no FROM checks WHERE id = ?',
+      [checkId],
+    );
+    if (rows.isEmpty) return null;
+    final String no = rows.first['check_no'] as String;
+    return (
+      bank: rows.first['bank_code'] as String,
+      masked: no.length <= 4 ? '****\$no' : '****\${no.substring(no.length - 4)}',
+    );
+  }
 
   /// 某一期已入帳的罰息合計（避免重複計提）。
   int billedPenaltyCents(String loanId, int seq) {
