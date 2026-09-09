@@ -68,7 +68,7 @@ cd apps/mobile
 flutter pub get
 ```
 
-預期：三個套件分別 880 / 16 / 21 支測試全過。任何一支紅的就先別往下走，
+預期：三個套件分別 **892 / 19 / 21** 支測試全過。任何一支紅的就先別往下走，
 那代表引擎有問題，跑到手機上也只是把錯的數字顯示得比較漂亮。
 
 ## 4. 產生 Drift 程式碼（**不做這步會編不起來**）
@@ -87,7 +87,7 @@ dart run build_runner build --delete-conflicting-outputs
 
 ```bash
 flutter analyze     # 預期：No issues found!
-flutter test        # 預期：16 支全過
+flutter test        # 預期：76 支全過
 ```
 
 ## 5. 跑到裝置上
@@ -107,7 +107,45 @@ flutter run --dart-define=DEV_LICENSE=1
 ```
 
 Debug 版的設定頁會多一個「載入範例資料」按鈕（Release 版沒有），
-MANUAL-QA 第 9 步會用到。
+MANUAL-QA 第 14 步會用到。
+
+### 建置旗標一覽
+
+| 旗標 | 作用 | 什麼時候用 |
+|---|---|---|
+| `--dart-define=DEV_LICENSE=1` | 略過 10 次試用限制，不消耗次數 | 開發。**做手動驗收不要加**，第 10 步驗不到 |
+| `--dart-define=DISABLE_DB_ENCRYPTION=true` | 用一般 sqlite3 開檔（明文），方便用 DB 工具直接看內容 | 只在 debug/profile 有效；**release build 會直接忽略它**，不可能靠它把上架版本變明文。加了之後設定頁「儲存狀態」會顯示紅色「資料庫加密：關閉（開發模式）」 |
+| `--dart-define=LICENSE_HMAC_KEY=<字串>` | 授權碼的簽章密鑰 | 不帶就**完全沒有授權能力**（任何授權碼都驗不過，只能用 10 次試用）。這是刻意的——原始碼裡不放預設密鑰。即使帶了也只是示範等級，見 MANUAL-QA「還不能封測」B 組第 5 項 |
+
+三個旗標可以同時傳：
+
+```bash
+flutter run \
+  --dart-define=DEV_LICENSE=1 \
+  --dart-define=DISABLE_DB_ENCRYPTION=true
+```
+
+### 備份檔在哪裡
+
+設定頁「匯出備份」會寫到 App 文件目錄下的 `backups/`：
+
+```
+<app documents>/backups/lending-backup-<timestamp>.slbak   # 手動匯出
+<app documents>/backups/rescue-<timestamp>.slbak           # 還原前自動存的救援備份
+```
+
+「從備份還原」只列得出這個資料夾裡的檔案——**目前沒有接系統檔案選取器或
+分享功能**（那是原生外掛，這個環境驗不了）。換手機時要自己用電腦端工具把
+檔案搬過去：
+
+```bash
+# Android
+adb exec-out run-as com.smalllendingos.mobile tar c files/backups \
+  > /tmp/backups.tar
+# iOS：Finder → 你的裝置 → 檔案 → 這個 App → 拖出來
+```
+
+還原時把 `.slbak` 檔放回新裝置的同一個 `backups/` 目錄，設定頁就會列出來。
 
 ### 已知的建置風險（沒驗證過，優先懷疑這幾項）
 

@@ -1,11 +1,16 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lending_engine/lending_engine.dart' as engine;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../db/app_database.dart';
 import '../../domain/dashboard_repository.dart';
 import '../../domain/enum_mapping.dart';
 import '../../domain/license_repository.dart';
+import '../../domain/loan_csv.dart';
 import '../../domain/schedule_item_math.dart';
 import '../../providers/app_providers.dart';
 import '../../theme/app_theme.dart';
@@ -92,6 +97,32 @@ class LoanDetailScreen extends ConsumerWidget {
                           );
                         },
                       ),
+                      if (loan.penaltyEnabled)
+                        FutureBuilder<int>(
+                          future: loanRepo.accruedPenaltyCents(loanId),
+                          builder: (context, penaltySnap) {
+                            final int penalty = penaltySnap.data ?? 0;
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text('應計罰息（尚未入帳）'),
+                                  Text(
+                                    formatMoney(penalty),
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: penalty > 0
+                                          ? AppColors.danger
+                                          : AppColors.deepBlue,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
                       const SizedBox(height: 16),
                       Row(
                         children: [
@@ -126,7 +157,17 @@ class LoanDetailScreen extends ConsumerWidget {
                 ),
               ),
               const SizedBox(height: 16),
-              Text('還款計畫', style: Theme.of(context).textTheme.titleMedium),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('還款計畫', style: Theme.of(context).textTheme.titleMedium),
+                  TextButton.icon(
+                    icon: const Icon(Icons.table_view, size: 18),
+                    label: const Text('匯出 CSV'),
+                    onPressed: () => _exportCsv(context, ref),
+                  ),
+                ],
+              ),
               const SizedBox(height: 8),
               scheduleAsync.when(
                 data: (items) => Column(
@@ -142,6 +183,57 @@ class LoanDetailScreen extends ConsumerWidget {
         },
       ),
     );
+  }
+
+  /// 匯出這筆貸款的計畫表＋實收＋分錄 CSV，方便封測者跟紙本對帳。
+  /// 檔案只寫到 App 自己的目錄，內容不含未遮罩的身分證字號。
+  Future<void> _exportCsv(BuildContext context, WidgetRef ref) async {
+    try {
+      final loanRepo = ref.read(loanRepositoryProvider);
+      final borrowerRepo = ref.read(borrowerRepositoryProvider);
+      final loan = (await loanRepo.findById(loanId))!;
+      final borrower = await borrowerRepo.findById(loan.borrowerId);
+
+      final csv = buildLoanCsv(
+        loan: loan,
+        borrowerName: borrower?.name ?? '(已刪除)',
+        maskedIdNumber: borrower == null
+            ? ''
+            : borrowerRepo.maskedIdNumber(borrower),
+        schedule: await loanRepo.scheduleFor(loanId),
+        payments: await loanRepo.paymentsFor(loanId),
+        ledger: await loanRepo.ledgerFor(loanId),
+      );
+
+      final dir = await getApplicationDocumentsDirectory();
+      final exports = Directory(p.join(dir.path, 'exports'));
+      if (!await exports.exists()) await exports.create(recursive: true);
+      final stamp = DateTime.now().toIso8601String().replaceAll(
+        RegExp(r'[:.]'),
+        '-',
+      );
+      final file = File(p.join(exports.path, 'loan-$stamp.csv'));
+      await file.writeAsString(csv);
+
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('已匯出 CSV'),
+          content: Text('檔案位置：\n${file.path}\n\n內容不含完整身分證字號。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('關閉'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('匯出失敗：$e')));
+    }
   }
 
   /// 確認撥款：可選實際撥款日（預設今天、可往回選、不可選未來）。

@@ -9,6 +9,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lending_engine/lending_engine.dart' as engine;
 import 'package:mobile/db/app_database.dart';
+import 'package:mobile/db/backup_service.dart';
 import 'package:mobile/db/pii_codec.dart';
 import 'package:mobile/db/seed.dart';
 import 'package:mobile/domain/borrower_repository.dart';
@@ -267,6 +268,206 @@ void main() {
         snapshot.totalOutstandingPrincipalCents +
             snapshot.totalUnpaidInterestCents,
       );
+    });
+    test('第 11 步：溢繳 1,000 元，入帳前算得出來、入帳後是一筆負向調整分錄', () async {
+      final loan = await registerQaLoan();
+      await loans.confirmDisbursement(loan.id);
+      final payoff = (await loans.paymentSuggestion(loan.id)).payoffCents;
+
+      // 對話框在寫入前先跑這個預覽，據此跳出說明對話框。
+      final preview = await loans.previewPayment(
+        loanId: loan.id,
+        amountCents: payoff + 100000, // 多繳 1,000 元
+        paidAt: DateTime.now(),
+      );
+      expect(preview.isOverpayment, isTrue);
+      expect(preview.overpaymentCents, 100000);
+      expect(formatMoney(preview.overpaymentCents), 'NT\$1,000.00');
+      expect(preview.periodsTouched, 12);
+
+      await loans.recordPayment(
+        loanId: loan.id,
+        amountCents: payoff + 100000,
+        paidAt: DateTime.now(),
+      );
+
+      final adjustments = (await loans.ledgerFor(loan.id))
+          .where((e) => e.type == 'adjustment')
+          .toList();
+      expect(adjustments, hasLength(1));
+      expect(adjustments.single.amountCents, -100000, reason: '溢繳記負向調整分錄');
+      expect((await loans.findById(loan.id))!.status, 'settled');
+    });
+
+    test('第 11b 步：剛好繳本期不算提前還本，繳兩期才跳提醒', () async {
+      final loan = await registerQaLoan();
+      await loans.confirmDisbursement(loan.id);
+
+      final one = await loans.previewPayment(
+        loanId: loan.id,
+        amountCents: 888488,
+        paidAt: DateTime.now(),
+      );
+      expect(one.isPrepayment, isFalse, reason: '正常繳款不該每次跳對話框');
+
+      final two = await loans.previewPayment(
+        loanId: loan.id,
+        amountCents: 888488 * 2,
+        paidAt: DateTime.now(),
+      );
+      expect(two.isPrepayment, isTrue);
+      expect(two.futurePeriodsBeyondCurrent, 1);
+    });
+
+    test('第 12 步：匯出備份 → 清空 → 還原，筆數與看板數字完全回來', () async {
+      final loan = await registerQaLoan();
+      await loans.confirmDisbursement(loan.id);
+      await loans.recordPayment(
+        loanId: loan.id,
+        amountCents: 888488,
+        paidAt: DateTime.now(),
+      );
+      final before = await dashboard.compute();
+      expect(before.totalReceivableCents, 9773365);
+
+      const String passphrase = 'qa-backup-passphrase';
+      final service = BackupService(db);
+      final String armored = await service.exportToString(
+        passphrase: passphrase,
+        iterations: 1000, // 測試用低迭代；App 實際用 150000
+      );
+
+      // 模擬「還原到另一台空機器」。
+      await service.replaceAll({
+        for (final t in [
+          'borrowers',
+          'loans',
+          'schedule_items',
+          'ledger_entries',
+          'payments',
+          'loan_events',
+          'app_license_rows',
+          'audit_logs',
+        ])
+          t: const <dynamic>[],
+      });
+      expect(await loans.listAll(), isEmpty);
+      expect((await dashboard.compute()).totalReceivableCents, 0);
+
+      String? rescue;
+      final outcome = await service.restoreFromString(
+        armored: armored,
+        passphrase: passphrase,
+        saveRescue: (r) async => rescue = r,
+        iterations: 1000,
+      );
+      expect(rescue, isNotNull, reason: '還原前一定要先存救援備份');
+      expect(outcome.borrowers, 1);
+      expect(outcome.loans, 1);
+
+      final after = await dashboard.compute();
+      expect(after.totalReceivableCents, before.totalReceivableCents);
+      expect(
+        after.totalInterestReceivedCents,
+        before.totalInterestReceivedCents,
+      );
+      expect(after.totalDisbursedCents, before.totalDisbursedCents);
+      expect(
+        (await loans.scheduleFor((await loans.listAll()).single.id)),
+        hasLength(12),
+      );
+    });
+
+    test('第 12b 步：口令打錯 → 還原中止，現有資料一筆都沒動', () async {
+      final loan = await registerQaLoan();
+      await loans.confirmDisbursement(loan.id);
+      final before = await dashboard.compute();
+
+      final service = BackupService(db);
+      final String armored = await service.exportToString(
+        passphrase: 'right-passphrase',
+        iterations: 1000,
+      );
+
+      await expectLater(
+        service.restoreFromString(
+          armored: armored,
+          passphrase: 'wrong-passphrase',
+          saveRescue: (_) async {},
+          iterations: 1000,
+        ),
+        throwsA(isA<Exception>()),
+      );
+
+      final after = await dashboard.compute();
+      expect(after.totalReceivableCents, before.totalReceivableCents);
+      expect(await loans.listAll(), hasLength(1));
+      expect(await loans.scheduleFor(loan.id), hasLength(12));
+    });
+
+    test('第 13 步：罰息開啟、連續逾期 3 期 → 累積罰息 NT\$493.56', () async {
+      final DateTime asOf = DateTime(2026, 5, 1);
+      final loan = await loans.registerLoan(
+        borrowerId: 'qa-borrower',
+        principalCents: 10000000,
+        method: engine.RepaymentMethod.epp,
+        rateType: engine.RateType.monthly,
+        rateBps: 100,
+        dayCount: engine.DayCount.thirty360,
+        tenorPeriods: 6,
+        plannedDisbursementDate: asOf.subtract(const Duration(days: 120)),
+        penaltyEnabled: true,
+        penaltyRateBps: 600,
+      );
+      await loans.confirmDisbursement(
+        loan.id,
+        at: asOf.subtract(const Duration(days: 120)),
+      );
+      await loans.runDailyBatch(loanId: loan.id, asOf: asOf);
+
+      final int penalty = await loans.accruedPenaltyCents(loan.id, asOf: asOf);
+      expect(penalty, 49356);
+      expect(formatMoney(penalty), 'NT\$493.56');
+
+      // 罰息關閉（登記表單的預設）時，同一情境一律 0。
+      final quiet = await loans.registerLoan(
+        borrowerId: 'qa-borrower',
+        principalCents: 10000000,
+        method: engine.RepaymentMethod.epp,
+        rateType: engine.RateType.monthly,
+        rateBps: 100,
+        dayCount: engine.DayCount.thirty360,
+        tenorPeriods: 6,
+        plannedDisbursementDate: asOf.subtract(const Duration(days: 120)),
+      );
+      await loans.confirmDisbursement(
+        quiet.id,
+        at: asOf.subtract(const Duration(days: 120)),
+      );
+      expect(await loans.accruedPenaltyCents(quiet.id, asOf: asOf), 0);
+    });
+
+    test('第 14 步：已有資料時載入範例資料，原有資料一筆都不會少', () async {
+      final borrowers = BorrowerRepository(db, PiiCodec.fromPassphrase('qa'));
+      final loan = await registerQaLoan();
+      await loans.confirmDisbursement(loan.id);
+      final before = await summarizeExistingData(
+        borrowers: borrowers,
+        loans: loans,
+      );
+      expect(before.isEmpty, isFalse, reason: '設定頁據此跳出二次確認');
+      final int ledgerBefore = (await loans.ledgerFor(loan.id)).length;
+
+      await seedDemoData(borrowers: borrowers, loans: loans);
+
+      final after = await summarizeExistingData(
+        borrowers: borrowers,
+        loans: loans,
+      );
+      expect(after.borrowers, before.borrowers + 2);
+      expect(after.loans, before.loans + 2);
+      expect((await loans.ledgerFor(loan.id)).length, ledgerBefore);
+      expect((await loans.findById(loan.id))!.principalCents, 10000000);
     });
   });
 }

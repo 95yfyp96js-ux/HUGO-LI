@@ -14,7 +14,7 @@ packages/license/          試用次數、裝置綁定、離線授權碼驗證�
 docs/interest-rules.md     計息與還款計畫規則（測試鎖定的規格來源）
 docs/state-machines.md     貸款狀態機、期別狀態機、授權狀態機
 docs/RUNNING.md            本機安裝與 flutter run 步驟、已知建置風險
-docs/MANUAL-QA.md          10 步手動驗收腳本（含預期數字）與「還不能封測」清單
+docs/MANUAL-QA.md          16 步手動驗收腳本（含預期數字）與「還不能封測」清單
 docs/ASSUMPTIONS.md        規格未明確指定之處的假設，以及本次開發環境限制
 ```
 
@@ -55,6 +55,9 @@ flutter run
 flutter run --dart-define=DEV_LICENSE=1
 ```
 
+建置旗標（`DEV_LICENSE` / `DISABLE_DB_ENCRYPTION` / `LICENSE_HMAC_KEY`）
+的完整說明見 [`docs/RUNNING.md`](docs/RUNNING.md)。
+
 ## 四步上手
 
 1. **新增借款人** — 姓名、身分證字號（僅加密存放＋雜湊查重，畫面一律遮罩顯示末 4 碼）、聯絡方式。
@@ -69,7 +72,7 @@ flutter run --dart-define=DEV_LICENSE=1
 計息公式、四種還款方式、利率換算、入帳瀑布順序、日結、提前還本規則，全部
 寫在 [`docs/interest-rules.md`](docs/interest-rules.md)，並由
 `packages/lending_engine/test/` 的固定數字案例與跨參數不變式測試鎖定
-（880 個測試，涵蓋 EMI/EPP/IO/BULLET 四種方式 × 多組本金/利率/期數組合，
+（892 個測試，涵蓋 EMI/EPP/IO/BULLET 四種方式 × 多組本金/利率/期數組合，
 驗證「本金加總＝貸款本金」「末期餘額＝0」兩項不變式；另有
 `golden_lifecycle_test.dart` 鎖定「整份計畫表逐期依瀑布沖銷到結清」的黃金案例）。
 
@@ -81,16 +84,31 @@ flutter run --dart-define=DEV_LICENSE=1
 - 未啟用時可自由瀏覽、產生報表、匯出；「新增貸款」「確認撥款」累計滿 10
   次後鎖定寫入。
 - 正式授權碼：`packages/license` 用 HMAC-SHA256 做離線簽章與驗證，格式
-  `<payload base64url>.<簽章 hex>`；一機一碼（見 `docs/ASSUMPTIONS.md` §6、§9
+  `<payload base64url>.<簽章 hex>`；一機一碼（見 `docs/ASSUMPTIONS.md` §6、§10
   的示範用途與已知限制）。
+- **簽章密鑰由 `--dart-define=LICENSE_HMAC_KEY=...` 帶入，原始碼裡沒有預設
+  密鑰**。沒帶就沒有授權能力（任何授權碼都驗不過，只能用 10 次試用）。
+- **這個機制是示範等級，可以被破解**：密鑰打進二進位檔、反編譯即可自簽；
+  試用次數存在本機資料庫，重裝或還原舊備份就會退回舊值。設定頁有同樣的
+  告知，並明講**禁止當成正式收費閘門、禁止在本 App 存任何真實金流密碼**。
 - 開發時可用 `--dart-define=DEV_LICENSE=1` 完全略過試用限制。
 
 ## 資料安全與備份
 
-- 本機 SQLite（SQLCipher 加密）儲存，**不上傳任何伺服器**。
+- 本機 SQLite（SQLCipher 加密）儲存，**不上傳任何伺服器**。Release build
+  一律加密；`--dart-define=DISABLE_DB_ENCRYPTION` 只在 debug/profile 有效。
+- 資料庫金鑰存放於 iOS Keychain／Android Keystore；舊版存在
+  SharedPreferences 的明文金鑰會在啟動時一次性遷移，**先讀回核對一致才刪除
+  明文**，核對失敗就保留明文並報錯（寧可留明文，也不要把資料庫鎖死）。
+  設定頁「儲存狀態」顯示加密開／關與金鑰來源，**不顯示金鑰本身**。
 - 身分證字號／完整地址／銀行帳號：應用層 AES-256-GCM 加密存密文，另存
   SHA-256 雜湊供查重（不明文比對），畫面一律遮罩顯示末 4 碼。
-- 設定頁「匯出備份」可把目前資料庫複製一份到本機 `backups/` 子目錄。
+- 設定頁「匯出備份／從備份還原」：`.slbak` 加密備份（AES-256-GCM ＋
+  PBKDF2-HMAC-SHA256 150,000 次迭代），匯出的是**資料內容**而非資料庫檔案，
+  換裝置、換金鑰都還原得回來。還原前一定先自動存一份救援備份；口令錯或
+  檔案毀損時直接中止，現有資料不動。口令不存在 App 裡，忘記就解不開。
+- 單筆貸款可匯出 CSV（計畫表＋實收＋分錄）供對帳，**不含未遮罩的身分證
+  字號**。
 
 ## 金額規則
 
@@ -102,7 +120,7 @@ flutter run --dart-define=DEV_LICENSE=1
 ## 手動驗收
 
 自動化測試證明不了觸控、鍵盤遮擋、字級、真機效能與「重啟後資料還在」。
-拿到裝置後請照 [`docs/MANUAL-QA.md`](docs/MANUAL-QA.md) 走 10 步，
+拿到裝置後請照 [`docs/MANUAL-QA.md`](docs/MANUAL-QA.md) 走 16 步，
 每一步的預期數字都由 `apps/mobile/test/manual_qa_script_test.dart` 鎖住
 （文件與程式對不上時測試會先失敗）。該文件末尾的「還不能封測」清單是目前
 已知、擋著封測的問題。
@@ -119,10 +137,29 @@ flutter run --dart-define=DEV_LICENSE=1
 - [x] 金額全面對齊到分，收款預設帶入精確應繳（`test/format_test.dart`）
 - [x] 撥款日可補登歷史日期、不可選未來
 - [x] 看板「待收金額」＝在貸本金＋待收利息，撥款後不會顯示 0
+- [x] 加密備份／還原，還原前自動存救援備份，口令錯不動現庫
+      （`apps/mobile/test/backup_test.dart`）
+- [x] 資料庫金鑰搬到 Keychain／Keystore，遷移失敗不刪明文
+      （`apps/mobile/test/db_key_store_test.dart`）
+- [x] 溢繳／提前還本入帳前先解釋並確認
+      （`test/payment_preview_test.dart`、`test/overpayment_dialog_test.dart`）
+- [x] 罰息長情境固定數字測試（連續逾期 3 期、寬限期內外、開／關）
+      （`packages/lending_engine/test/penalty_test.dart`、
+      `apps/mobile/test/penalty_test.dart`）
+- [x] 載入範例資料不毀既有資料、已有資料時二次確認
+      （`apps/mobile/test/seed_guard_test.dart`）
+- [x] 單筆 CSV 匯出不含未遮罩身分證字號（`apps/mobile/test/loan_csv_test.dart`）
+
+需要真機才能打勾的（見 `docs/MANUAL-QA.md`「還不能封測」A 組）：
+
 - [ ] 第三人在有 Android Studio / Xcode 的機器上依 `docs/RUNNING.md`
       實際 `flutter run` 起來（本環境無模擬器，未能親自驗證）
-- [ ] 有人照 `docs/MANUAL-QA.md` 在真機上走完 10 步
-- [ ] 「還不能封測」清單清空（見 `docs/MANUAL-QA.md` 文末）
+- [ ] 有人照 `docs/MANUAL-QA.md` 在真機上走完 16 步
+- [ ] 確認 `lending.db` 用一般 `sqlite3` 打不開（SQLCipher 真的生效）
+- [ ] 確認 Keychain／Keystore 遷移在真機上顯示正確的金鑰來源
+
+本階段刻意不做（見「還不能封測」B 組）：備份檔的 App 內分享／檔案選取器、
+溢繳退款流程、跨貸款總帳與 PDF 對帳單、核貸建議 UI 入口。
 
 ## 禁止事項（本系統刻意不做）
 

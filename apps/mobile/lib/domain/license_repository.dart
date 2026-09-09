@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:drift/drift.dart';
 import 'package:license/license.dart' as license;
@@ -7,14 +8,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../db/app_database.dart';
 import 'id_gen.dart';
 
-/// 示範用密鑰，非正式金鑰管理（見 docs/ASSUMPTIONS.md §6）。正式產品應改為
-/// 由建置流程注入、不寫死於原始碼。
-const List<int> _demoLicenseSecretKey = [
-  0x53, 0x6d, 0x61, 0x6c, 0x6c, 0x4c, 0x65, 0x6e, //
-  0x64, 0x69, 0x6e, 0x67, 0x4f, 0x53, 0x2d, 0x64,
-  0x65, 0x6d, 0x6f, 0x2d, 0x73, 0x65, 0x63, 0x72,
-  0x65, 0x74, 0x2d, 0x6b, 0x65, 0x79, 0x2d, 0x76,
-];
+/// 授權簽章密鑰：由建置時傳入 `--dart-define=LICENSE_HMAC_KEY=...`。
+///
+/// **沒有傳入時 [licenseSigningConfigured] 為 false，所有授權碼一律驗不過**，
+/// App 停留在 10 次試用模式。這是刻意的：與其在原始碼裡放一組人人拿得到的
+/// 「示範密鑰」讓人誤以為有保護，不如明說這個 build 根本沒有授權能力。
+///
+/// 即使有傳入，這仍然是**示範等級**：密鑰會被打進 App 二進位檔，反編譯就能
+/// 取出並自簽授權碼。禁止當成正式收費閘門（設定頁有同樣的告知）。
+const String _licenseHmacKey = String.fromEnvironment('LICENSE_HMAC_KEY');
+
+bool get licenseSigningConfigured => _licenseHmacKey.isNotEmpty;
+
+List<int> get _licenseSecretKey => utf8.encode(_licenseHmacKey);
 
 class TrialExhaustedException implements Exception {
   @override
@@ -100,7 +106,13 @@ class LicenseRepository {
 
   /// 輸入授權碼啟用（離線 HMAC 驗證＋一機一碼，見 docs/ASSUMPTIONS.md §6、§9）。
   Future<license.LicenseVerificationResult> activate(String code) async {
-    final verifier = license.LicenseVerifier(_demoLicenseSecretKey);
+    if (!licenseSigningConfigured) {
+      // 這個 build 沒有帶入簽章密鑰，任何授權碼都不可能是有效的。
+      return const license.LicenseVerificationResult.invalid(
+        license.LicenseInvalidReason.signatureMismatch,
+      );
+    }
+    final verifier = license.LicenseVerifier(_licenseSecretKey);
     final String deviceId = _deviceIdProvider.currentDeviceId();
     final result = verifier.verify(code.trim(), currentDeviceId: deviceId);
     if (result.valid) {

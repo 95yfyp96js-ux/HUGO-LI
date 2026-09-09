@@ -3,6 +3,8 @@ import 'package:ledger/ledger.dart' as ledger;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../db/app_database.dart';
+import '../db/backup_service.dart';
+import '../db/db_key_store.dart';
 import '../db/pii_codec.dart';
 import '../domain/borrower_repository.dart';
 import '../domain/dashboard_repository.dart';
@@ -31,6 +33,15 @@ final piiCodecProvider = Provider<PiiCodec>((ref) {
 
 /// 對應 `--dart-define=DEV_LICENSE=1`（見 spec §7）。
 final devLicenseOverrideProvider = Provider<bool>((ref) => false);
+
+/// 這次啟動時資料庫金鑰是從哪裡來的（設定頁的「儲存狀態」會顯示遷移結果）。
+final dbKeyOriginProvider = Provider<DbKeyOrigin>(
+  (ref) => DbKeyOrigin.secureStorage,
+);
+
+final backupServiceProvider = Provider<BackupService>(
+  (ref) => BackupService(ref.watch(databaseProvider)),
+);
 
 final deviceIdProvider = Provider<PersistedDeviceIdProvider>((ref) {
   return PersistedDeviceIdProvider(ref.watch(sharedPreferencesProvider));
@@ -84,6 +95,9 @@ final licenseRowStreamProvider = StreamProvider((ref) {
 /// 重放得出，見 docs/ASSUMPTIONS.md §8）。
 final dashboardSnapshotProvider = FutureProvider<ledger.DashboardSnapshot>((
   ref,
-) {
+) async {
+  // 進看板前先補跑日結：逾期判定要算到今天，不能只靠 App 啟動那一次
+  // （App 可能已經在背景待了好幾天，見 docs/interest-rules.md §5）。
+  await ref.watch(loanRepositoryProvider).runDailyBatch();
   return ref.watch(dashboardRepositoryProvider).compute();
 });

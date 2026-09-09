@@ -14,6 +14,49 @@ class IllegalLoanTransitionException implements Exception {
   String toString() => message;
 }
 
+/// 收款預覽：這筆錢會怎麼分配、會不會溢繳。全部單位為分。
+class PaymentPreview {
+  const PaymentPreview({
+    required this.amountCents,
+    required this.penaltyCents,
+    required this.interestCents,
+    required this.principalCents,
+    required this.overpaymentCents,
+    required this.periodsTouched,
+    required this.futurePeriodsTouched,
+    required this.futurePeriodsBeyondCurrent,
+  });
+
+  final int amountCents;
+  final int penaltyCents;
+  final int interestCents;
+  final int principalCents;
+
+  /// 沖完所有未繳期別後還剩下的錢。> 0 就是溢繳，入帳前必須先問過使用者。
+  final int overpaymentCents;
+
+  /// 這筆錢會碰到幾期。
+  final int periodsTouched;
+
+  /// 其中有幾期是「還沒到期」的。
+  ///
+  /// 注意：這個數字本身**不適合**拿來決定要不要跳提醒。在到期日之前繳掉當期，
+  /// 是最常見的正常繳款方式（收款對話框預設帶入的就是這個金額），每次都跳
+  /// 「提前還本」只會讓人閉著眼睛點過去，B4 的提醒就失效了。
+  final int futurePeriodsTouched;
+
+  /// 碰到「本期以外」的未到期期別數（＝真正的提前還本）。
+  ///
+  /// 「本期」指最早一期尚未繳清的期別。這筆錢沖完本期還往後吃，才是使用者
+  /// 可能沒預期到的事，值得在入帳前先問一次。
+  final int futurePeriodsBeyondCurrent;
+
+  bool get isOverpayment => overpaymentCents > 0;
+
+  /// 是否要在入帳前跳出提前還本說明（見 [futurePeriodsBeyondCurrent]）。
+  bool get isPrepayment => futurePeriodsBeyondCurrent > 0;
+}
+
 /// 收款時可以一鍵帶入的三種金額（分）。
 class PaymentSuggestion {
   const PaymentSuggestion({
@@ -76,6 +119,12 @@ class LoanRepository {
 
   Future<List<LedgerEntryRow>> allLedgerEntries() =>
       _db.select(_db.ledgerEntries).get();
+
+  Future<List<Payment>> paymentsFor(String loanId) =>
+      (_db.select(_db.payments)
+            ..where((t) => t.loanId.equals(loanId))
+            ..orderBy([(t) => OrderingTerm.asc(t.paidAt)]))
+          .get();
 
   /// 登記貸款＋建約＋自動生成計畫（四步上手第 2、3 步）。狀態機驅動至
   /// `ACCEPTED`（撥款前最後一站），尚未寫入任何分錄、尚未開始計息。
@@ -178,6 +227,10 @@ class LoanRepository {
         '撥款 ${loan.principalCents} 分',
       );
     });
+
+    // 補登歷史撥款時，計畫表可能一產生就有好幾期已經逾期——立刻跑一次日結，
+    // 不要等到下次開 App（見 spec B6）。
+    await runDailyBatch(loanId: loanId);
   }
 
   /// 還款金額建議（分）。收款對話框用它預先帶入**精確到分**的金額，
@@ -188,9 +241,22 @@ class LoanRepository {
     int overdue = 0; // 所有已逾期期別的剩餘應繳
     int total = 0; // 全部未繳清期別的剩餘應繳（＝結清金額）
 
+    final Loan loan = (await findById(loanId))!;
+    final DateTime now = DateTime.now();
+
     for (final item in items) {
       if (item.isSettledPeriod) continue;
-      final int remaining = item.shortfallCents;
+      final int penalty = await _penaltyOwedCents(
+        loan: loan,
+        item: item,
+        asOf: now,
+        overdue: engine.isPastGrace(
+          dueDate: item.dueDate,
+          graceDays: loan.graceDays,
+          asOf: now,
+        ),
+      );
+      final int remaining = item.shortfallCents + penalty;
       if (remaining <= 0) continue;
 
       total += remaining;
@@ -203,6 +269,135 @@ class LoanRepository {
       overdueCents: overdue,
       payoffCents: total,
     );
+  }
+
+  /// 收款預覽：算出這筆錢會怎麼分配、會不會溢繳，**完全不寫入**。
+  ///
+  /// 對話框用它在入帳前把「多出多少、去哪裡」講清楚（見 spec B4：禁止默默
+  /// 寫分錄）。分配邏輯與 [recordPayment] 同一套規則：由舊到新逐期沖銷，
+  /// 期內依瀑布罰息→利息→本金。
+  Future<PaymentPreview> previewPayment({
+    required String loanId,
+    required int amountCents,
+    required DateTime paidAt,
+  }) async {
+    final Loan loan = (await findById(loanId))!;
+    final items = await scheduleFor(loanId);
+
+    int remaining = amountCents;
+    int appliedPeriods = 0;
+    int toPenalty = 0;
+    int toInterest = 0;
+    int toPrincipal = 0;
+    int futurePeriods = 0;
+    int futureBeyondCurrent = 0;
+
+    for (final item in items) {
+      if (remaining <= 0) break;
+      if (item.isSettledPeriod) continue;
+
+      final int interestOwed = item.interestCents - item.interestPaidCents;
+      final int principalOwed = item.principalCents - item.principalPaidCents;
+      if (interestOwed <= 0 && principalOwed <= 0) continue;
+
+      final bool overdue = engine.isPastGrace(
+        dueDate: item.dueDate,
+        graceDays: loan.graceDays,
+        asOf: paidAt,
+      );
+      final int penaltyOwed = await _penaltyOwedCents(
+        loan: loan,
+        item: item,
+        asOf: paidAt,
+        overdue: overdue,
+      );
+
+      final int payPenalty = remaining < penaltyOwed ? remaining : penaltyOwed;
+      remaining -= payPenalty;
+      final int payInterest = remaining < interestOwed
+          ? remaining
+          : interestOwed;
+      remaining -= payInterest;
+      final int payPrincipal = remaining < principalOwed
+          ? remaining
+          : principalOwed;
+      remaining -= payPrincipal;
+
+      toPenalty += payPenalty;
+      toInterest += payInterest;
+      toPrincipal += payPrincipal;
+      appliedPeriods++;
+      if (item.dueDate.isAfter(paidAt)) {
+        futurePeriods++;
+        // 第一個被沖銷的期別＝「本期」，提前繳本期不算提前還本。
+        if (appliedPeriods > 1) futureBeyondCurrent++;
+      }
+    }
+
+    return PaymentPreview(
+      amountCents: amountCents,
+      penaltyCents: toPenalty,
+      interestCents: toInterest,
+      principalCents: toPrincipal,
+      overpaymentCents: remaining,
+      periodsTouched: appliedPeriods,
+      futurePeriodsTouched: futurePeriods,
+      futurePeriodsBeyondCurrent: futureBeyondCurrent,
+    );
+  }
+
+  /// 該期目前尚未入帳的罰息（分）。罰息未啟用或未逾期一律 0。
+  Future<int> _penaltyOwedCents({
+    required Loan loan,
+    required ScheduleItem item,
+    required DateTime asOf,
+    required bool overdue,
+  }) async {
+    if (!loan.penaltyEnabled || !overdue) return 0;
+    final int interestOwed = item.interestCents - item.interestPaidCents;
+    final int principalOwed = item.principalCents - item.principalPaidCents;
+    final penaltySpec = engine.RateSpec(
+      rateType: engine.RateType.annual,
+      rateBps: loan.penaltyRateBps,
+      dayCount: engine.DayCount.act365,
+    );
+    final int accruedTotal = engine.accrueInterestCents(
+      balanceCents: interestOwed + principalOwed,
+      rateSpec: penaltySpec,
+      from: item.dueDate.add(Duration(days: loan.graceDays)),
+      to: asOf,
+    );
+    final int alreadyBilled = await _sumLedger(
+      loan.id,
+      ledger.LedgerEntryType.penalty,
+      item.periodNumber,
+    );
+    final int owed = accruedTotal - alreadyBilled;
+    return owed > 0 ? owed : 0;
+  }
+
+  /// 目前整筆貸款已累積、尚未入帳的罰息合計（分）。罰息未啟用時恆為 0。
+  Future<int> accruedPenaltyCents(String loanId, {DateTime? asOf}) async {
+    final Loan loan = (await findById(loanId))!;
+    if (!loan.penaltyEnabled) return 0;
+    final DateTime now = asOf ?? DateTime.now();
+    final items = await scheduleFor(loanId);
+    int total = 0;
+    for (final item in items) {
+      if (item.isSettledPeriod) continue;
+      final bool overdue = engine.isPastGrace(
+        dueDate: item.dueDate,
+        graceDays: loan.graceDays,
+        asOf: now,
+      );
+      total += await _penaltyOwedCents(
+        loan: loan,
+        item: item,
+        asOf: now,
+        overdue: overdue,
+      );
+    }
+    return total;
   }
 
   /// 記一筆還款：依瀑布順序、由舊到新沖銷各期，溢收記為調整分錄
@@ -243,26 +438,12 @@ class LoanRepository {
         asOf: paidAt,
       );
 
-      int penaltyOwed = 0;
-      if (loan.penaltyEnabled && overdue) {
-        final penaltySpec = engine.RateSpec(
-          rateType: engine.RateType.annual,
-          rateBps: loan.penaltyRateBps,
-          dayCount: engine.DayCount.act365,
-        );
-        final int accruedTotal = engine.accrueInterestCents(
-          balanceCents: interestOwed + principalOwed,
-          rateSpec: penaltySpec,
-          from: item.dueDate.add(Duration(days: loan.graceDays)),
-          to: paidAt,
-        );
-        final int alreadyBilled = await _sumLedger(
-          loanId,
-          ledger.LedgerEntryType.penalty,
-          item.periodNumber,
-        );
-        penaltyOwed = (accruedTotal - alreadyBilled).clamp(0, 1 << 62);
-      }
+      final int penaltyOwed = await _penaltyOwedCents(
+        loan: loan,
+        item: item,
+        asOf: paidAt,
+        overdue: overdue,
+      );
 
       final int payPenalty = remaining < penaltyOwed ? remaining : penaltyOwed;
       remaining -= payPenalty;
