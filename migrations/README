@@ -1,7 +1,0 @@
-資料庫結構變更一律走 Alembic migration，可追蹤、可還原。
-禁止修改已套用的 migration 檔（規格 午）。要改結構就新增一支 revision。
-連線字串請用環境變數 SLOS_DATABASE_URL，不要寫死在 alembic.ini。
-指令：
-  python3 -m alembic upgrade head    # 套用到最新
-  python3 -m alembic downgrade -1    # 回退一版
-  python3 -m alembic revision --autogenerate -m "說明"

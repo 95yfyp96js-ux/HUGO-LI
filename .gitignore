@@ -1,8 +1,0 @@
-__pycache__/
-*.py[cod]
-.pytest_cache/
-*.db
-*.db-journal
-*.xlsx
-backup/
-.venv/
